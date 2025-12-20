@@ -1,0 +1,12 @@
+{
+  "name": "xfeeder/xf_websocket_server",
+  "description": "Xpress Feeder Airline WebSocket Server",
+  "require": {
+    "php": ">=8.0"
+  },
+  "autoload": {
+    "psr-4": {
+      "Xfeeder\\": "src/"
+    }
+  }
+}
