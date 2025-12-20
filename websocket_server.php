@@ -59,42 +59,72 @@ class XpressFeederWebSocket implements MessageComponentInterface {
     /**
      * Initialize database connection
      */
-    private function initDatabase() {
-        try {
-            // Load database configuration
-            $configFile = dirname(__FILE__) . '/../config/database.php';
-            
-            if (file_exists($configFile)) {
-                $config = require $configFile;
-                $host = $config['host'] ?? 'localhost';
-                $dbname = $config['database'] ?? 'xfeed306_flightops';
-                $username = $config['username'] ?? 'xfeed306_user';
-                $password = $config['password'] ?? '(v9CH)}Q4O2cbWCm';
-            } else {
-                // Fallback to default values
-                $host = 'localhost';
-                $dbname = 'xfeed306_flightops';
-                $username = 'xfeed306_user';
-                $password = '(v9CH)}Q4O2cbWCm'; 
-            }
-            
-            $this->db = new PDO(
-                "mysql:host=$host;dbname=$dbname;charset=utf8mb4",
-                $username,
-                $password,
-                [
-                    PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
-                    PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
-                    PDO::ATTR_EMULATE_PREPARES => false
-                ]
-            );
-            
-            $this->logMessage("Database connection established");
-        } catch (PDOException $e) {
-            $this->logMessage("Database connection failed: " . $e->getMessage(), 'ERROR');
+   private function initDatabase() {
+    try {
+        // If PDO MySQL driver not available, skip DB connection (server can still run)
+        if (!extension_loaded('pdo') || !extension_loaded('pdo_mysql')) {
+            $this->logMessage("PDO MySQL driver not available; skipping DB connection", 'WARN');
             $this->db = null;
+            return;
         }
+
+        // Read env vars first (recommended)
+        $host = getenv('DB_HOST') ?: null;
+        $port = getenv('DB_PORT') ?: null;
+        $dbname = getenv('DB_DATABASE') ?: null;
+        $username = getenv('DB_USERNAME') ?: null;
+        $password = getenv('DB_PASSWORD') ?: null;
+        $socket = getenv('DB_SOCKET') ?: null;
+
+        // Fallback to config file if env not set
+        if ((!$host || !$dbname || !$username) && file_exists(dirname(__FILE__) . '/../config/database.php')) {
+            $config = require dirname(__FILE__) . '/../config/database.php';
+            $host = $host ?: ($config['host'] ?? null);
+            $port = $port ?: ($config['port'] ?? null);
+            $dbname = $dbname ?: ($config['database'] ?? null);
+            $username = $username ?: ($config['username'] ?? null);
+            $password = $password ?: ($config['password'] ?? null);
+            $socket = $socket ?: ($config['socket'] ?? null);
+        }
+
+        // If still missing required values, log and skip DB connection
+        if (!$dbname || !$username) {
+            $this->logMessage("Database credentials not fully configured; skipping DB connection", 'WARN');
+            $this->db = null;
+            return;
+        }
+
+        // If host is 'localhost', force TCP to avoid unix socket usage in containers
+        if ($host === 'localhost' || $host === null) {
+            // prefer explicit env DB_HOST=127.0.0.1, but fallback to 127.0.0.1 here
+            $host = '127.0.0.1';
+        }
+
+        // Build DSN - prefer socket if specified, otherwise use host[:port]
+        if (!empty($socket)) {
+            $dsn = "mysql:unix_socket={$socket};dbname={$dbname};charset=utf8mb4";
+        } else {
+            $portPart = $port ? ";port={$port}" : '';
+            $dsn = "mysql:host={$host}{$portPart};dbname={$dbname};charset=utf8mb4";
+        }
+
+        $this->db = new PDO(
+            $dsn,
+            $username,
+            $password,
+            [
+                PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+                PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+                PDO::ATTR_EMULATE_PREPARES => false
+            ]
+        );
+
+        $this->logMessage("Database connection established to {$host}" . ($port ? ":{$port}" : '') . "/{$dbname}");
+    } catch (PDOException $e) {
+        $this->logMessage("Database connection failed: " . $e->getMessage(), 'ERROR');
+        $this->db = null;
     }
+}
 
     /**
      * Handle new connection
@@ -757,6 +787,7 @@ try {
     echo "Stack trace:\n" . $e->getTraceAsString() . "\n";
     exit(1);
 }
+
 
 
 
