@@ -21,7 +21,7 @@ use Ratchet\MessageComponentInterface;
 use Ratchet\ConnectionInterface;
 
 // Load Composer autoloader
-require dirname(__FILE__) . '/../vendor/autoload.php';
+require __DIR__ . '/vendor/autoload.php';
 
 /**
  * Xpress Feeder Central WebSocket Handler
@@ -756,4 +756,5 @@ try {
     echo "Stack trace:\n" . $e->getTraceAsString() . "\n";
     exit(1);
 }
+
 
