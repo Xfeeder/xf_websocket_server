@@ -9,6 +9,9 @@ COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
 
 WORKDIR /app
 
+COPY composer.json composer.lock* ./
+RUN composer install --no-dev --optimize-autoloader || true
+
 COPY . .
 
 EXPOSE 10000
