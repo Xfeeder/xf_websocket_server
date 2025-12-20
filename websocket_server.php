@@ -1,18 +1,9 @@
-
 <?php
 /**
- * Xpress Feeder Airline - Central WebSocket Server
- * Handles real-time notifications for ALL departments
- * Location: /home/xfeed306/public_html/websocket/websocket_server.php
- * 
- * Departments Supported:
- * - Flight Operations (dispatch, fleet timeline, flight tracking)
- * - Cargo Management (shipments, loading, manifests)
- * - Crew Management (assignments, check-ins, schedules)
- * - Admin (system-wide alerts, announcements)
- * 
- * Start Server: php websocket_server.php
- * Port: 8080 (configurable)
+ * Xpress Feeder Airline - Central WebSocket Server (Render version)
+ * - Handles real-time notifications for ALL departments
+ * - No direct DB access; DB stays on main server
+ * - This file is meant to run inside a Docker container on Render
  */
 
 use Ratchet\Server\IoServer;
@@ -21,79 +12,48 @@ use Ratchet\WebSocket\WsServer;
 use Ratchet\MessageComponentInterface;
 use Ratchet\ConnectionInterface;
 
-// Load Composer autoloader
+// Composer autoloader (vendor is in /app/vendor in the container)
 require __DIR__ . '/vendor/autoload.php';
 
 /**
- * Xpress Feeder Central WebSocket Handler
+ * Xpress Feeder Central WebSocket Handler (Render)
  */
 class XpressFeederWebSocket implements MessageComponentInterface {
     protected $clients;
     protected $users;
     protected $subscriptions;
-    protected $db;
-    
+    protected $db; // kept for signature, but not used in Render
+
     // Department constants
-    const DEPT_FLIGHTOPS = 'flightops';
-    const DEPT_CARGO = 'cargo';
-    const DEPT_CREW = 'crew';
-    const DEPT_DISPATCH = 'dispatch';
-    const DEPT_ADMIN = 'admin';
+    const DEPT_FLIGHTOPS   = 'flightops';
+    const DEPT_CARGO       = 'cargo';
+    const DEPT_CREW        = 'crew';
+    const DEPT_DISPATCH    = 'dispatch';
+    const DEPT_ADMIN       = 'admin';
     const DEPT_MAINTENANCE = 'maintenance';
 
     public function __construct() {
         $this->clients = new \SplObjectStorage;
-        $this->users = [];
+        $this->users   = [];
         $this->subscriptions = [
-            'flights' => [],
-            'aircraft' => [],
-            'cargo' => [],
-            'crew' => [],
+            'flights'     => [],
+            'aircraft'    => [],
+            'cargo'       => [],
+            'crew'        => [],
             'departments' => []
         ];
-        
-        $this->initDatabase();
-        $this->logMessage("Central WebSocket Server initialized for ALL departments");
+
+        $this->initDatabase(); // Render: disabled, see function below
+        $this->logMessage("Central WebSocket Server (Render) initialized for ALL departments");
     }
 
     /**
      * Initialize database connection
+     * Render version: DB handled by main PHP app, not here
      */
     private function initDatabase() {
-        try {
-            // Load database configuration
-            $configFile = dirname(__FILE__) . '/../config/database.php';
-            
-            if (file_exists($configFile)) {
-                $config = require $configFile;
-                $host = $config['host'] ?? 'localhost';
-                $dbname = $config['database'] ?? 'xfeed306_flightops';
-                $username = $config['username'] ?? 'xfeed306_user';
-                $password = $config['password'] ?? '(v9CH)}Q4O2cbWCm';
-            } else {
-                // Fallback to default values
-                $host = 'localhost';
-                $dbname = 'xfeed306_flightops';
-                $username = 'xfeed306_user';
-                $password = '(v9CH)}Q4O2cbWCm'; 
-            }
-            
-            $this->db = new PDO(
-                "mysql:host=$host;dbname=$dbname;charset=utf8mb4",
-                $username,
-                $password,
-                [
-                    PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
-                    PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
-                    PDO::ATTR_EMULATE_PREPARES => false
-                ]
-            );
-            
-            $this->logMessage("Database connection established");
-        } catch (PDOException $e) {
-            $this->logMessage("Database connection failed: " . $e->getMessage(), 'ERROR');
-            $this->db = null;
-        }
+        $this->db = null;
+        $this->logMessage("Database connection DISABLED in Render; main app keeps full DB control.");
     }
 
     /**
@@ -102,16 +62,16 @@ class XpressFeederWebSocket implements MessageComponentInterface {
     public function onOpen(ConnectionInterface $conn) {
         $this->clients->attach($conn);
         $conn->subscriptions = [];
-        
+
         $this->logMessage("New connection: {$conn->resourceId}");
-        
+
         // Send welcome message
         $conn->send(json_encode([
-            'type' => 'connection_established',
-            'resource_id' => $conn->resourceId,
-            'server' => 'Xpress Feeder Central WebSocket',
-            'version' => '1.0',
-            'timestamp' => date('Y-m-d H:i:s'),
+            'type'               => 'connection_established',
+            'resource_id'        => $conn->resourceId,
+            'server'             => 'Xpress Feeder Central WebSocket (Render)',
+            'version'            => '1.0',
+            'timestamp'          => date('Y-m-d H:i:s'),
             'active_connections' => count($this->clients)
         ]));
     }
@@ -121,9 +81,9 @@ class XpressFeederWebSocket implements MessageComponentInterface {
      */
     public function onMessage(ConnectionInterface $from, $msg) {
         $this->logMessage("Message from {$from->resourceId}: $msg");
-        
+
         $data = json_decode($msg, true);
-        
+
         if (!$data) {
             $this->sendError($from, 'Invalid JSON format');
             return;
@@ -203,8 +163,8 @@ class XpressFeederWebSocket implements MessageComponentInterface {
             // Utility
             case 'ping':
                 $from->send(json_encode([
-                    'type' => 'pong',
-                    'timestamp' => time(),
+                    'type'        => 'pong',
+                    'timestamp'   => time(),
                     'server_time' => date('Y-m-d H:i:s')
                 ]));
                 break;
@@ -222,10 +182,10 @@ class XpressFeederWebSocket implements MessageComponentInterface {
      * Handle user authentication
      */
     private function handleAuth(ConnectionInterface $conn, $data) {
-        $userId = $data['user_id'] ?? null;
-        $department = $data['department'] ?? null;
-        $sessionToken = $data['session_token'] ?? null;
-        $userName = $data['user_name'] ?? 'Unknown User';
+        $userId      = $data['user_id'] ?? null;
+        $department  = $data['department'] ?? null;
+        $sessionToken = $data['session_token'] ?? null; // kept for future use
+        $userName    = $data['user_name'] ?? 'Unknown User';
 
         if (!$userId) {
             $this->sendError($conn, 'User ID required');
@@ -233,9 +193,9 @@ class XpressFeederWebSocket implements MessageComponentInterface {
         }
 
         // Store user information on connection
-        $conn->userId = $userId;
-        $conn->department = $department;
-        $conn->userName = $userName;
+        $conn->userId          = $userId;
+        $conn->department      = $department;
+        $conn->userName        = $userName;
         $conn->authenticatedAt = time();
 
         // Add to users tracking
@@ -252,11 +212,11 @@ class XpressFeederWebSocket implements MessageComponentInterface {
         $this->logMessage("User {$userId} ({$userName}) authenticated for department: {$department}");
 
         $conn->send(json_encode([
-            'type' => 'auth_success',
-            'user_id' => $userId,
-            'department' => $department,
-            'message' => 'Authentication successful',
-            'server_time' => date('Y-m-d H:i:s'),
+            'type'          => 'auth_success',
+            'user_id'       => $userId,
+            'department'    => $department,
+            'message'       => 'Authentication successful',
+            'server_time'   => date('Y-m-d H:i:s'),
             'connection_id' => $conn->resourceId
         ]));
 
@@ -269,7 +229,7 @@ class XpressFeederWebSocket implements MessageComponentInterface {
      */
     private function subscribeFlight(ConnectionInterface $conn, $data) {
         $flightId = $data['flight_id'] ?? null;
-        
+
         if (!$flightId) {
             $this->sendError($conn, 'Flight ID required');
             return;
@@ -277,17 +237,17 @@ class XpressFeederWebSocket implements MessageComponentInterface {
 
         $subscriptionKey = 'flight_' . $flightId;
         $conn->subscriptions[$subscriptionKey] = true;
-        
+
         if (!isset($this->subscriptions['flights'][$flightId])) {
             $this->subscriptions['flights'][$flightId] = [];
         }
         $this->subscriptions['flights'][$flightId][] = $conn;
 
         $conn->send(json_encode([
-            'type' => 'subscription_success',
-            'subscription' => 'flight',
-            'flight_id' => $flightId,
-            'message' => "Subscribed to flight {$flightId} updates"
+            'type'        => 'subscription_success',
+            'subscription'=> 'flight',
+            'flight_id'   => $flightId,
+            'message'     => "Subscribed to flight {$flightId} updates"
         ]));
 
         $this->logMessage("Connection {$conn->resourceId} subscribed to flight {$flightId}");
@@ -298,7 +258,7 @@ class XpressFeederWebSocket implements MessageComponentInterface {
      */
     private function subscribeAircraft(ConnectionInterface $conn, $data) {
         $aircraftReg = $data['aircraft_registration'] ?? null;
-        
+
         if (!$aircraftReg) {
             $this->sendError($conn, 'Aircraft registration required');
             return;
@@ -306,17 +266,17 @@ class XpressFeederWebSocket implements MessageComponentInterface {
 
         $subscriptionKey = 'aircraft_' . $aircraftReg;
         $conn->subscriptions[$subscriptionKey] = true;
-        
+
         if (!isset($this->subscriptions['aircraft'][$aircraftReg])) {
             $this->subscriptions['aircraft'][$aircraftReg] = [];
         }
         $this->subscriptions['aircraft'][$aircraftReg][] = $conn;
 
         $conn->send(json_encode([
-            'type' => 'subscription_success',
-            'subscription' => 'aircraft',
-            'aircraft_registration' => $aircraftReg,
-            'message' => "Subscribed to aircraft {$aircraftReg} updates"
+            'type'                 => 'subscription_success',
+            'subscription'         => 'aircraft',
+            'aircraft_registration'=> $aircraftReg,
+            'message'              => "Subscribed to aircraft {$aircraftReg} updates"
         ]));
 
         $this->logMessage("Connection {$conn->resourceId} subscribed to aircraft {$aircraftReg}");
@@ -327,7 +287,7 @@ class XpressFeederWebSocket implements MessageComponentInterface {
      */
     private function subscribeCargo(ConnectionInterface $conn, $data) {
         $cargoId = $data['cargo_id'] ?? null;
-        
+
         if (!$cargoId) {
             $this->sendError($conn, 'Cargo ID required');
             return;
@@ -335,17 +295,17 @@ class XpressFeederWebSocket implements MessageComponentInterface {
 
         $subscriptionKey = 'cargo_' . $cargoId;
         $conn->subscriptions[$subscriptionKey] = true;
-        
+
         if (!isset($this->subscriptions['cargo'][$cargoId])) {
             $this->subscriptions['cargo'][$cargoId] = [];
         }
         $this->subscriptions['cargo'][$cargoId][] = $conn;
 
         $conn->send(json_encode([
-            'type' => 'subscription_success',
+            'type'      => 'subscription_success',
             'subscription' => 'cargo',
-            'cargo_id' => $cargoId,
-            'message' => "Subscribed to cargo {$cargoId} updates"
+            'cargo_id'  => $cargoId,
+            'message'   => "Subscribed to cargo {$cargoId} updates"
         ]));
 
         $this->logMessage("Connection {$conn->resourceId} subscribed to cargo {$cargoId}");
@@ -356,7 +316,7 @@ class XpressFeederWebSocket implements MessageComponentInterface {
      */
     private function subscribeDepartment(ConnectionInterface $conn, $data) {
         $department = $data['department'] ?? null;
-        
+
         if (!$department) {
             $this->sendError($conn, 'Department required');
             return;
@@ -364,17 +324,17 @@ class XpressFeederWebSocket implements MessageComponentInterface {
 
         $subscriptionKey = 'dept_' . $department;
         $conn->subscriptions[$subscriptionKey] = true;
-        
+
         if (!isset($this->subscriptions['departments'][$department])) {
             $this->subscriptions['departments'][$department] = [];
         }
         $this->subscriptions['departments'][$department][] = $conn;
 
         $conn->send(json_encode([
-            'type' => 'subscription_success',
-            'subscription' => 'department',
+            'type'       => 'subscription_success',
+            'subscription'=> 'department',
             'department' => $department,
-            'message' => "Subscribed to {$department} department updates"
+            'message'    => "Subscribed to {$department} department updates"
         ]));
 
         $this->logMessage("Connection {$conn->resourceId} subscribed to department {$department}");
@@ -385,13 +345,13 @@ class XpressFeederWebSocket implements MessageComponentInterface {
      */
     private function unsubscribe(ConnectionInterface $conn, $data) {
         $subscriptionKey = $data['subscription_key'] ?? null;
-        
+
         if ($subscriptionKey && isset($conn->subscriptions[$subscriptionKey])) {
             unset($conn->subscriptions[$subscriptionKey]);
-            
+
             $conn->send(json_encode([
-                'type' => 'unsubscribe_success',
-                'subscription_key' => $subscriptionKey
+                'type'            => 'unsubscribe_success',
+                'subscription_key'=> $subscriptionKey
             ]));
         }
     }
@@ -401,7 +361,6 @@ class XpressFeederWebSocket implements MessageComponentInterface {
      */
     private function handleFlightUpdate($data) {
         $flightId = $data['flight_id'] ?? null;
-        
         if (!$flightId) return;
 
         $data['timestamp'] = date('Y-m-d H:i:s');
@@ -414,7 +373,7 @@ class XpressFeederWebSocket implements MessageComponentInterface {
             }
         }
 
-        // Send to flight ops department
+        // Send to flight ops & dispatch
         $this->sendToDepartment(self::DEPT_FLIGHTOPS, $data);
         $this->sendToDepartment(self::DEPT_DISPATCH, $data);
 
@@ -426,7 +385,6 @@ class XpressFeederWebSocket implements MessageComponentInterface {
      */
     private function handleAircraftUpdate($data) {
         $aircraftReg = $data['aircraft_registration'] ?? null;
-        
         if (!$aircraftReg) return;
 
         $data['timestamp'] = date('Y-m-d H:i:s');
@@ -446,13 +404,11 @@ class XpressFeederWebSocket implements MessageComponentInterface {
         $this->logMessage("Aircraft update broadcast for {$aircraftReg}: {$data['type']}");
     }
 
-  
-        /**
+    /**
      * Handle cargo updates
      */
     private function handleCargoUpdate($data) {
         $cargoId = $data['cargo_id'] ?? null;
-        
         if (!$cargoId) return;
 
         $data['timestamp'] = date('Y-m-d H:i:s');
@@ -476,11 +432,7 @@ class XpressFeederWebSocket implements MessageComponentInterface {
      * Handle crew updates
      */
     private function handleCrewUpdate($data) {
-        $crewId = $data['crew_id'] ?? null;
-        
         $data['timestamp'] = date('Y-m-d H:i:s');
-
-        // Send to crew department
         $this->sendToDepartment(self::DEPT_CREW, $data);
         $this->sendToDepartment(self::DEPT_FLIGHTOPS, $data);
 
@@ -492,8 +444,6 @@ class XpressFeederWebSocket implements MessageComponentInterface {
      */
     private function handleDispatchUpdate($data) {
         $data['timestamp'] = date('Y-m-d H:i:s');
-
-        // Send to dispatch and flight ops
         $this->sendToDepartment(self::DEPT_DISPATCH, $data);
         $this->sendToDepartment(self::DEPT_FLIGHTOPS, $data);
 
@@ -505,9 +455,8 @@ class XpressFeederWebSocket implements MessageComponentInterface {
      */
     private function handleSystemWide($data) {
         $data['timestamp'] = date('Y-m-d H:i:s');
-        $data['priority'] = $data['priority'] ?? 'high';
-        
-        // Broadcast to ALL connected clients
+        $data['priority']  = $data['priority'] ?? 'high';
+
         $this->broadcast($data);
 
         $this->logMessage("System-wide broadcast: {$data['type']}", 'ALERT');
@@ -565,20 +514,20 @@ class XpressFeederWebSocket implements MessageComponentInterface {
      */
     private function sendStats(ConnectionInterface $conn) {
         $stats = [
-            'type' => 'server_stats',
-            'total_connections' => count($this->clients),
-            'authenticated_users' => count($this->users),
-            'subscriptions' => [
-                'flights' => count($this->subscriptions['flights']),
-                'aircraft' => count($this->subscriptions['aircraft']),
-                'cargo' => count($this->subscriptions['cargo']),
+            'type'               => 'server_stats',
+            'total_connections'  => count($this->clients),
+            'authenticated_users'=> count($this->users),
+            'subscriptions'      => [
+                'flights'     => count($this->subscriptions['flights']),
+                'aircraft'    => count($this->subscriptions['aircraft']),
+                'cargo'       => count($this->subscriptions['cargo']),
                 'departments' => array_map(function($dept) {
                     return count($dept);
                 }, $this->subscriptions['departments'])
             ],
             'server_uptime' => $this->getUptime(),
-            'server_time' => date('Y-m-d H:i:s'),
-            'memory_usage' => round(memory_get_usage() / 1024 / 1024, 2) . ' MB'
+            'server_time'   => date('Y-m-d H:i:s'),
+            'memory_usage'  => round(memory_get_usage() / 1024 / 1024, 2) . ' MB'
         ];
 
         $conn->send(json_encode($stats));
@@ -589,8 +538,8 @@ class XpressFeederWebSocket implements MessageComponentInterface {
      */
     private function sendError(ConnectionInterface $conn, $message) {
         $conn->send(json_encode([
-            'type' => 'error',
-            'message' => $message,
+            'type'      => 'error',
+            'message'   => $message,
             'timestamp' => date('Y-m-d H:i:s')
         ]));
     }
@@ -599,7 +548,6 @@ class XpressFeederWebSocket implements MessageComponentInterface {
      * Handle connection close
      */
     public function onClose(ConnectionInterface $conn) {
-        // Remove from clients
         $this->clients->detach($conn);
 
         // Remove from users
@@ -612,8 +560,6 @@ class XpressFeederWebSocket implements MessageComponentInterface {
                         return $c !== $conn;
                     }
                 );
-                
-                // Remove user entry if no more connections
                 if (empty($this->users[$userId])) {
                     unset($this->users[$userId]);
                 }
@@ -621,8 +567,8 @@ class XpressFeederWebSocket implements MessageComponentInterface {
         }
 
         // Remove from all subscriptions
-        foreach ($this->subscriptions as $type => &$subs) {
-            foreach ($subs as $key => &$connections) {
+        foreach ($this->subscriptions as &$subs) {
+            foreach ($subs as &$connections) {
                 $connections = array_filter(
                     $connections,
                     function($c) use ($conn) {
@@ -633,8 +579,8 @@ class XpressFeederWebSocket implements MessageComponentInterface {
         }
 
         $userName = $conn->userName ?? 'Unknown';
-        $userId = $conn->userId ?? 'N/A';
-        
+        $userId   = $conn->userId ?? 'N/A';
+
         $this->logMessage("Connection {$conn->resourceId} closed (User: {$userName}, ID: {$userId})");
         $this->logMessage("Active connections: " . count($this->clients));
     }
@@ -652,19 +598,9 @@ class XpressFeederWebSocket implements MessageComponentInterface {
      */
     private function logMessage($message, $level = 'INFO') {
         $timestamp = date('Y-m-d H:i:s');
-        $logEntry = "[{$timestamp}] [{$level}] {$message}\n";
-        
+        $logEntry  = "[{$timestamp}] [{$level}] {$message}\n";
+
         echo $logEntry;
-        
-        // Also log to file
-        $logFile = dirname(__FILE__) . '/logs/websocket.log';
-        $logDir = dirname($logFile);
-        
-        if (!is_dir($logDir)) {
-            mkdir($logDir, 0755, true);
-        }
-        
-        file_put_contents($logFile, $logEntry, FILE_APPEND);
     }
 
     /**
@@ -675,22 +611,23 @@ class XpressFeederWebSocket implements MessageComponentInterface {
         if ($startTime === null) {
             $startTime = time();
         }
-        
-        $uptime = time() - $startTime;
-        $hours = floor($uptime / 3600);
+
+        $uptime  = time() - $startTime;
+        $hours   = floor($uptime / 3600);
         $minutes = floor(($uptime % 3600) / 60);
         $seconds = $uptime % 60;
-        
+
         return sprintf("%02d:%02d:%02d", $hours, $minutes, $seconds);
     }
 
     /**
      * Cleanup stale connections (called periodically)
+     * Note: requires event loop integration to use
      */
     public function cleanupStaleConnections() {
         $timeout = 300; // 5 minutes
-        $now = time();
-        
+        $now     = time();
+
         foreach ($this->clients as $client) {
             if (isset($client->authenticatedAt)) {
                 $lastActivity = $client->authenticatedAt;
@@ -704,15 +641,16 @@ class XpressFeederWebSocket implements MessageComponentInterface {
 }
 
 /**
- * Start the WebSocket Server
+ * Start the WebSocket Server (Render)
  */
 try {
-    $port = 8080; // Change if needed
-    $host = '0.0.0.0'; // Listen on all interfaces
-    
+    // Use PORT env var from Render; default to 10000
+    $port = getenv('PORT') ? (int)getenv('PORT') : 10000;
+    $host = '0.0.0.0';
+
     echo "\n";
     echo "========================================================\n";
-    echo "    XPRESS FEEDER AIRLINE - CENTRAL WEBSOCKET SERVER    \n";
+    echo "  XPRESS FEEDER AIRLINE - CENTRAL WEBSOCKET SERVER (Render)\n";
     echo "========================================================\n";
     echo "  Real-Time Notifications for All Departments\n";
     echo "========================================================\n";
@@ -721,22 +659,10 @@ try {
     echo "  - Host: {$host}\n";
     echo "  - Port: {$port}\n";
     echo "  - Started: " . date('Y-m-d H:i:s') . "\n";
-    echo "\n";
-    echo "Supported Departments:\n";
-    echo "  ✓ Flight Operations\n";
-    echo "  ✓ Cargo Management\n";
-    echo "  ✓ Ground Operations\n";
-    echo "  ✓ Crew Management\n";
-    echo "  ✓ Dispatch\n";
-    echo "  ✓ Maintenance\n";
-    echo "  ✓ Administration\n";
-    echo "\n";
-    echo "========================================================\n";
-    echo "Server is running... Press Ctrl+C to stop\n";
     echo "========================================================\n\n";
 
     $websocket = new XpressFeederWebSocket();
-    
+
     $server = IoServer::factory(
         new HttpServer(
             new WsServer($websocket)
@@ -745,18 +671,10 @@ try {
         $host
     );
 
-    // Optional: Setup periodic cleanup (requires ReactPHP event loop)
-    // $server->loop->addPeriodicTimer(60, function() use ($websocket) {
-    //     $websocket->cleanupStaleConnections();
-    // });
-
     $server->run();
-    
+
 } catch (Exception $e) {
     echo "\n[ERROR] Failed to start WebSocket server: " . $e->getMessage() . "\n";
     echo "Stack trace:\n" . $e->getTraceAsString() . "\n";
     exit(1);
 }
-
-
-
