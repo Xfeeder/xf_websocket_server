@@ -68,13 +68,13 @@ class XpressFeederWebSocket implements MessageComponentInterface {
                 $host = $config['host'] ?? 'localhost';
                 $dbname = $config['database'] ?? 'xfeed306_flightops';
                 $username = $config['username'] ?? 'xfeed306_user';
-                $password = $config['password'] ?? '';
+                $password = $config['password'] ?? '(v9CH)}Q4O2cbWCm';
             } else {
                 // Fallback to default values
                 $host = 'localhost';
                 $dbname = 'xfeed306_flightops';
                 $username = 'xfeed306_user';
-                $password = 'your_password'; // UPDATE THIS
+                $password = '(v9CH)}Q4O2cbWCm'; 
             }
             
             $this->db = new PDO(
@@ -756,5 +756,6 @@ try {
     echo "Stack trace:\n" . $e->getTraceAsString() . "\n";
     exit(1);
 }
+
 
 
