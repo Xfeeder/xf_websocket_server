@@ -445,10 +445,7 @@ class XpressFeederWebSocket implements MessageComponentInterface {
         $this->logMessage("Aircraft update broadcast for {$aircraftReg}: {$data['type']}");
     }
 
-    /**
-     * Handle cargo updates
-     */
-    private function handleCargoUpdate($data) {
+  
         /**
      * Handle cargo updates
      */
@@ -759,3 +756,4 @@ try {
     echo "Stack trace:\n" . $e->getTraceAsString() . "\n";
     exit(1);
 }
+
