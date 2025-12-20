@@ -1,2 +1,6 @@
-# xf_websocket_server
-Xpress Feeder Airline - Central WebSocket Server  * Handles real-time notifications for ALL departments  * Location: /home/xfeed306/public_html/websocket/websocket_server.php
+# Xpress Feeder Airline - WebSocket Server Documentation
+
+## Overview
+Central WebSocket server for real-time notifications across all departments of Xpress Feeder Airline operations system.
+
+## Directory Structure
