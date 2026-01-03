@@ -1,8 +1,7 @@
 <?php
 /**
  * Xpress Feeder Airline - Central WebSocket Server (Render)
- * Monitors live MySQL database for flight and maintenance changes
- * Broadcasts updates to all dashboards in real-time
+ * Monitors live MySQL database every 1 second
  */
 
 use Ratchet\Server\IoServer;
@@ -21,10 +20,6 @@ class XpressFeederWebSocket implements MessageComponentInterface {
     protected $lastChecked = [];
 
     const DEPT_FLIGHTOPS   = 'flightops';
-    const DEPT_CARGO       = 'cargo';
-    const DEPT_CREW        = 'crew';
-    const DEPT_DISPATCH    = 'dispatch';
-    const DEPT_ADMIN       = 'admin';
     const DEPT_MAINTENANCE = 'maintenance';
 
     public function __construct() {
@@ -33,13 +28,11 @@ class XpressFeederWebSocket implements MessageComponentInterface {
         $this->subscriptions = [
             'flights'     => [],
             'aircraft'    => [],
-            'cargo'       => [],
-            'crew'        => [],
             'departments' => []
         ];
 
         $this->initDatabase();
-        $this->logMessage("Central WebSocket Server (Render) initialized with live database monitoring");
+        echo "[" . date('Y-m-d H:i:s') . "] WebSocket Server initialized with 1-second monitoring\n";
     }
 
     private function initDatabase() {
@@ -54,340 +47,175 @@ class XpressFeederWebSocket implements MessageComponentInterface {
                 "mysql:host={$host};port={$port};dbname={$name};charset=utf8mb4",
                 $user,
                 $pass,
-                [
-                    PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
-                    PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC
-                ]
+                [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]
             );
 
-            $this->logMessage("✓ Database connected: {$host}/{$name}");
+            echo "[" . date('Y-m-d H:i:s') . "] ✓ Database connected: {$host}/{$name}\n";
             
-            // Initialize last checked timestamps
-            $this->lastChecked['flights'] = date('Y-m-d H:i:s', strtotime('-10 seconds'));
-            $this->lastChecked['maintenance'] = date('Y-m-d H:i:s', strtotime('-10 seconds'));
+            $this->lastChecked['flights'] = date('Y-m-d H:i:s', strtotime('-5 seconds'));
+            $this->lastChecked['maintenance'] = date('Y-m-d H:i:s', strtotime('-5 seconds'));
             
         } catch (PDOException $e) {
-            $this->logMessage("✗ Database connection failed: " . $e->getMessage(), 'ERROR');
+            echo "[" . date('Y-m-d H:i:s') . "] ✗ Database error: " . $e->getMessage() . "\n";
             $this->db = null;
         }
     }
 
-    /**
-     * Monitor database for changes every second
-     */
     public function monitorDatabase() {
         if (!$this->db) return;
 
         try {
-            // Monitor flight_schedule table
-            $stmt = $this->db->prepare("
-                SELECT * FROM flight_schedule
-                WHERE updated_at > :last_checked
-                ORDER BY updated_at DESC
-                LIMIT 50
-            ");
-            $stmt->execute(['last_checked' => $this->lastChecked['flights']]);
+            // Monitor flights
+            $stmt = $this->db->prepare("SELECT * FROM flight_schedule WHERE updated_at > ? LIMIT 20");
+            $stmt->execute([$this->lastChecked['flights']]);
             
             while ($row = $stmt->fetch()) {
                 $this->broadcastFlightUpdate($row);
             }
-            
-            // Update last checked time for flights
             $this->lastChecked['flights'] = date('Y-m-d H:i:s');
 
-            // Monitor aircraft_mro table
-            $stmt = $this->db->prepare("
-                SELECT * FROM aircraft_mro
-                WHERE updated_at > :last_checked
-                ORDER BY updated_at DESC
-                LIMIT 50
-            ");
-            $stmt->execute(['last_checked' => $this->lastChecked['maintenance']]);
+            // Monitor maintenance
+            $stmt = $this->db->prepare("SELECT * FROM aircraft_mro WHERE updated_at > ? LIMIT 20");
+            $stmt->execute([$this->lastChecked['maintenance']]);
             
             while ($row = $stmt->fetch()) {
                 $this->broadcastMaintenanceUpdate($row);
             }
-            
-            // Update last checked time for maintenance
             $this->lastChecked['maintenance'] = date('Y-m-d H:i:s');
             
         } catch (PDOException $e) {
-            $this->logMessage("Database monitoring error: " . $e->getMessage(), 'ERROR');
+            echo "[" . date('Y-m-d H:i:s') . "] Monitor error: " . $e->getMessage() . "\n";
         }
     }
 
-    private function broadcastFlightUpdate($flightData) {
+    private function broadcastFlightUpdate($data) {
         $message = [
             'type' => 'flight_status_change',
-            'flight_id' => $flightData['flight_id'] ?? $flightData['id'],
-            'flight_number' => $flightData['flight_number'] ?? null,
-            'status' => $flightData['status'] ?? null,
-            'aircraft_registration' => $flightData['aircraft_registration'] ?? null,
-            'departure_time' => $flightData['departure_time'] ?? null,
-            'arrival_time' => $flightData['arrival_time'] ?? null,
-            'origin' => $flightData['origin'] ?? null,
-            'destination' => $flightData['destination'] ?? null,
+            'flight_id' => $data['id'] ?? $data['flight_id'],
+            'flight_number' => $data['flight_number'] ?? null,
+            'status' => $data['status'] ?? null,
+            'aircraft_registration' => $data['aircraft_registration'] ?? null,
             'timestamp' => date('Y-m-d H:i:s'),
-            'data' => $flightData
+            'data' => $data
         ];
 
-        $this->handleFlightUpdate($message);
-        $this->logMessage("Flight update broadcast: " . ($message['flight_number'] ?? $message['flight_id']));
+        $this->broadcast($message);
+        echo "[" . date('Y-m-d H:i:s') . "] Flight update: " . ($message['flight_number'] ?? 'unknown') . "\n";
     }
 
-    private function broadcastMaintenanceUpdate($mroData) {
+    private function broadcastMaintenanceUpdate($data) {
         $message = [
             'type' => 'aircraft_maintenance',
-            'aircraft_registration' => $mroData['aircraft_registration'] ?? $mroData['registration'],
-            'status' => $mroData['status'] ?? 'In Maintenance',
-            'maintenance_type' => $mroData['maintenance_type'] ?? null,
-            'start_time' => $mroData['start_time'] ?? null,
-            'estimated_completion' => $mroData['estimated_completion'] ?? null,
-            'notes' => $mroData['notes'] ?? null,
+            'aircraft_registration' => $data['aircraft_registration'] ?? $data['registration'],
+            'status' => $data['status'] ?? 'In Maintenance',
+            'start_time' => $data['start_time'] ?? null,
+            'estimated_completion' => $data['estimated_completion'] ?? null,
             'timestamp' => date('Y-m-d H:i:s'),
-            'data' => $mroData
+            'data' => $data
         ];
 
-        $this->handleAircraftUpdate($message);
-        $this->logMessage("Maintenance update broadcast: " . $message['aircraft_registration']);
+        $this->broadcast($message);
+        echo "[" . date('Y-m-d H:i:s') . "] Maintenance update: " . $message['aircraft_registration'] . "\n";
     }
 
     public function onOpen(ConnectionInterface $conn) {
         $this->clients->attach($conn);
         $conn->subscriptions = [];
 
-        $this->logMessage("New connection: {$conn->resourceId}");
+        echo "[" . date('Y-m-d H:i:s') . "] New connection: {$conn->resourceId}\n";
 
         $conn->send(json_encode([
-            'type'               => 'connection_established',
-            'resource_id'        => $conn->resourceId,
-            'server'             => 'Xpress Feeder Central WebSocket (Render)',
-            'version'            => '1.0',
-            'timestamp'          => date('Y-m-d H:i:s'),
-            'active_connections' => count($this->clients),
-            'database_status'    => $this->db ? 'connected' : 'disconnected',
-            'monitoring_interval'=> '1 second'
+            'type' => 'connection_established',
+            'resource_id' => $conn->resourceId,
+            'server' => 'Xpress Feeder WebSocket (Render)',
+            'timestamp' => date('Y-m-d H:i:s'),
+            'database_status' => $this->db ? 'connected' : 'disconnected'
         ]));
     }
 
     public function onMessage(ConnectionInterface $from, $msg) {
-        $this->logMessage("Message from {$from->resourceId}: $msg");
-
         $data = json_decode($msg, true);
-
-        if (!$data) {
-            $this->sendError($from, 'Invalid JSON format');
-            return;
-        }
+        if (!$data) return;
 
         $type = $data['type'] ?? '';
 
         switch ($type) {
             case 'auth':
             case 'connect':
-                $this->handleAuth($from, $data);
+                $from->userId = $data['user_id'] ?? 'guest';
+                $from->send(json_encode(['type' => 'auth_success', 'user_id' => $from->userId]));
                 break;
 
-            case 'subscribe_flight':
-                $this->subscribeFlight($from, $data);
-                break;
-            case 'subscribe_aircraft':
-                $this->subscribeAircraft($from, $data);
-                break;
-            case 'subscribe_cargo':
-                $this->subscribeCargo($from, $data);
-                break;
             case 'subscribe_department':
-                $this->subscribeDepartment($from, $data);
-                break;
-            case 'unsubscribe':
-                $this->unsubscribe($from, $data);
-                break;
-
-            case 'flight_update':
-            case 'flight_status_change':
-            case 'flight_departure':
-            case 'flight_arrival':
-            case 'flight_delay':
-                $this->handleFlightUpdate($data);
+                $dept = $data['department'] ?? null;
+                if ($dept) {
+                    $from->subscriptions['dept_' . $dept] = true;
+                    $from->send(json_encode(['type' => 'subscription_success', 'department' => $dept]));
+                }
                 break;
 
-            case 'aircraft_status':
-            case 'aircraft_location':
-            case 'aircraft_maintenance':
-                $this->handleAircraftUpdate($data);
-                break;
-
-            case 'cargo_update':
-                $this->handleCargoUpdate($data);
+            case 'subscribe_aircraft':
+                $reg = $data['aircraft_registration'] ?? null;
+                if ($reg) {
+                    $from->subscriptions['aircraft_' . $reg] = true;
+                    $from->send(json_encode(['type' => 'subscription_success', 'aircraft_registration' => $reg]));
+                }
                 break;
 
             case 'ping':
-                $from->send(json_encode([
-                    'type'        => 'pong',
-                    'timestamp'   => time(),
-                    'server_time' => date('Y-m-d H:i:s')
-                ]));
+                $from->send(json_encode(['type' => 'pong', 'timestamp' => time()]));
                 break;
-
-            case 'get_stats':
-                $this->sendStats($from);
-                break;
-
-            default:
-                $this->sendError($from, "Unknown message type: {$type}");
         }
     }
 
-    private function handleAuth(ConnectionInterface $conn, $data) {
-        $userId      = $data['user_id'] ?? null;
-        $department  = $data['department'] ?? null;
-        $userName    = $data['user_name'] ?? $data['username'] ?? 'Unknown User';
-
-        if (!$userId) {
-            $this->sendError($conn, 'User ID required');
-            return;
+    private function broadcast($data) {
+        $message = json_encode($data);
+        foreach ($this->clients as $client) {
+            $client->send($message);
         }
-
-        $conn->userId          = $userId;
-        $conn->department      = $department;
-        $conn->userName        = $userName;
-        $conn->authenticatedAt = time();
-
-        if (!isset($this->users[$userId])) {
-            $this->users[$userId] = [];
-        }
-        $this->users[$userId][] = $conn;
-
-        if ($department) {
-            $this->subscribeDepartment($conn, ['department' => $department]);
-        }
-
-        $this->logMessage("User {$userId} ({$userName}) authenticated for department: {$department}");
-
-        $conn->send(json_encode([
-            'type'          => 'auth_success',
-            'user_id'       => $userId,
-            'department'    => $department,
-            'message'       => 'Authentication successful',
-            'server_time'   => date('Y-m-d H:i:s'),
-            'connection_id' => $conn->resourceId
-        ]));
-
-        $this->sendStats($conn);
     }
 
-    private function subscribeFlight(ConnectionInterface $conn, $data) {
-        $flightId = $data['flight_id'] ?? null;
-
-        if (!$flightId) {
-            $this->sendError($conn, 'Flight ID required');
-            return;
-        }
-
-        $subscriptionKey = 'flight_' . $flightId;
-        $conn->subscriptions[$subscriptionKey] = true;
-
-        if (!isset($this->subscriptions['flights'][$flightId])) {
-            $this->subscriptions['flights'][$flightId] = [];
-        }
-        $this->subscriptions['flights'][$flightId][] = $conn;
-
-        $conn->send(json_encode([
-            'type'        => 'subscription_success',
-            'subscription'=> 'flight',
-            'flight_id'   => $flightId,
-            'message'     => "Subscribed to flight {$flightId} updates"
-        ]));
-
-        $this->logMessage("Connection {$conn->resourceId} subscribed to flight {$flightId}");
+    public function onClose(ConnectionInterface $conn) {
+        $this->clients->detach($conn);
+        echo "[" . date('Y-m-d H:i:s') . "] Connection closed: {$conn->resourceId}\n";
     }
 
-    private function subscribeAircraft(ConnectionInterface $conn, $data) {
-        $aircraftReg = $data['aircraft_registration'] ?? null;
-
-        if (!$aircraftReg) {
-            $this->sendError($conn, 'Aircraft registration required');
-            return;
-        }
-
-        $subscriptionKey = 'aircraft_' . $aircraftReg;
-        $conn->subscriptions[$subscriptionKey] = true;
-
-        if (!isset($this->subscriptions['aircraft'][$aircraftReg])) {
-            $this->subscriptions['aircraft'][$aircraftReg] = [];
-        }
-        $this->subscriptions['aircraft'][$aircraftReg][] = $conn;
-
-        $conn->send(json_encode([
-            'type'                 => 'subscription_success',
-            'subscription'         => 'aircraft',
-            'aircraft_registration'=> $aircraftReg,
-            'message'              => "Subscribed to aircraft {$aircraftReg} updates"
-        ]));
-
-        $this->logMessage("Connection {$conn->resourceId} subscribed to aircraft {$aircraftReg}");
+    public function onError(ConnectionInterface $conn, \Exception $e) {
+        echo "[" . date('Y-m-d H:i:s') . "] Error: {$e->getMessage()}\n";
+        $conn->close();
     }
+}
 
-    private function subscribeCargo(ConnectionInterface $conn, $data) {
-        $cargoId = $data['cargo_id'] ?? null;
+try {
+    $port = getenv('PORT') ? (int)getenv('PORT') : 10000;
+    $host = '0.0.0.0';
 
-        if (!$cargoId) {
-            $this->sendError($conn, 'Cargo ID required');
-            return;
-        }
+    echo "\n========================================\n";
+    echo "XPRESS FEEDER WEBSOCKET SERVER (Render)\n";
+    echo "========================================\n";
+    echo "Host: {$host}\n";
+    echo "Port: {$port}\n";
+    echo "Started: " . date('Y-m-d H:i:s') . "\n";
+    echo "========================================\n\n";
 
-        $subscriptionKey = 'cargo_' . $cargoId;
-        $conn->subscriptions[$subscriptionKey] = true;
+    $websocket = new XpressFeederWebSocket();
 
-        if (!isset($this->subscriptions['cargo'][$cargoId])) {
-            $this->subscriptions['cargo'][$cargoId] = [];
-        }
-        $this->subscriptions['cargo'][$cargoId][] = $conn;
+    $server = IoServer::factory(
+        new HttpServer(
+            new WsServer($websocket)
+        ),
+        $port,
+        $host
+    );
 
-        $conn->send(json_encode([
-            'type'      => 'subscription_success',
-            'subscription' => 'cargo',
-            'cargo_id'  => $cargoId,
-            'message'   => "Subscribed to cargo {$cargoId} updates"
-        ]));
+    $loop = $server->loop;
+    $loop->addPeriodicTimer(1, function() use ($websocket) {
+        $websocket->monitorDatabase();
+    });
 
-        $this->logMessage("Connection {$conn->resourceId} subscribed to cargo {$cargoId}");
-    }
+    $server->run();
 
-    private function subscribeDepartment(ConnectionInterface $conn, $data) {
-        $department = $data['department'] ?? null;
-
-        if (!$department) {
-            $this->sendError($conn, 'Department required');
-            return;
-        }
-
-        $subscriptionKey = 'dept_' . $department;
-        $conn->subscriptions[$subscriptionKey] = true;
-
-        if (!isset($this->subscriptions['departments'][$department])) {
-            $this->subscriptions['departments'][$department] = [];
-        }
-        $this->subscriptions['departments'][$department][] = $conn;
-
-        $conn->send(json_encode([
-            'type'       => 'subscription_success',
-            'subscription'=> 'department',
-            'department' => $department,
-            'message'    => "Subscribed to {$department} department updates"
-        ]));
-
-        $this->logMessage("Connection {$conn->resourceId} subscribed to department {$department}");
-    }
-
-    private function unsubscribe(ConnectionInterface $conn, $data) {
-        $subscriptionKey = $data['subscription_key'] ?? null;
-
-        if ($subscriptionKey && isset($conn->subscriptions[$subscriptionKey])) {
-            unset($conn->subscriptions[$subscriptionKey]);
-
-            $conn->send(json_encode([
-                'type'            => 'unsubscribe_success',
-                'subscription_key'=> $subscriptionKey
-            ]));
+} catch (Exception $e) {
+    echo "\n[ERROR] " . $e->getMessage() . "\n";
+    exit(1);
+}
