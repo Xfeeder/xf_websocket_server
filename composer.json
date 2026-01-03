@@ -3,7 +3,8 @@
   "description": "Xpress Feeder Airline WebSocket Server",
   "require": {
     "php": ">=8.0",
-    "cboden/ratchet": "^0.4"
+    "cboden/ratchet": "^0.4",
+    "textalk/websocket": "^1.6"
   },
   "autoload": {
     "psr-4": {
