@@ -162,6 +162,15 @@ class XpressFeederWebSocket implements MessageComponentInterface {
                 }
                 break;
 
+            case 'flight_position':
+                // Forward raw position data to all connected clients
+                $message = [
+                    'type' => 'flight_position',
+                    'data' => $data['data'] ?? []
+                ];
+                $this->broadcast($message);
+                break;
+
             case 'ping':
                 $from->send(json_encode(['type' => 'pong', 'timestamp' => time()]));
                 break;
