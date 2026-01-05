@@ -68,12 +68,19 @@ class XpressFeederWebSocket implements MessageComponentInterface {
     public function __construct() {
         $this->clients = new \SplObjectStorage;
         
-        // DATABASE CONNECTION
-        $this->pdo = new PDO(
-            'pgsql:host=ep-orange-lab-af9er9mv-pooler.c-2.us-west-2.aws.neon.tech;dbname=neondb',
-            'neondb_owner',
-            'npg_QXNRj7PTlk1A'
-        );
+        
+        // DATABASE CONNECTION WITH ENVIRONMENT VARIABLES
+$dbHost = getenv('DB_HOST') ?: 'ep-orange-lab-af9er9mv-pooler.c-2.us-west-2.aws.neon.tech';
+$dbName = getenv('DB_NAME') ?: 'neondb';
+$dbUser = getenv('DB_USER') ?: 'neondb_owner';
+$dbPass = getenv('DB_PASSWORD') ?: 'npg_QXNRj7PTlk1A';
+
+$this->pdo = new PDO(
+    "pgsql:host={$dbHost};dbname={$dbName}",
+    $dbUser,
+    $dbPass,
+    [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]
+);
         
         // LOAD ALL AIRBORNE FLIGHTS (FIXED SCHEDULE FILTER)
         $currentTime = date('H:i:s');
@@ -364,7 +371,11 @@ class FlightPushHandler implements \Ratchet\Http\HttpServerInterface {
 }
 
 try {
-    $port = getenv('PORT') ? (int)getenv('PORT') : 10000;
+    $port = (int)(getenv('PORT') ?: 10000);
+    // Ensure port is valid for Render
+    if ($port < 1 || $port > 65535) {
+        $port = 10000;
+    }
     $host = '0.0.0.0';
 
     echo "\n========================================\n";
@@ -372,6 +383,7 @@ try {
     echo "========================================\n";
     echo "Host: {$host}\n";
     echo "Port: {$port}\n";
+    echo "Database: PostgreSQL/NeonDB\n";
     echo "Started: " . date('Y-m-d H:i:s') . "\n";
     echo "Mode: PIPER PA-31-350 REAL FLIGHT PHYSICS\n";
     echo "========================================\n\n";
@@ -418,3 +430,4 @@ try {
     echo "\n[ERROR] " . $e->getMessage() . "\n";
     exit(1);
 }
+
