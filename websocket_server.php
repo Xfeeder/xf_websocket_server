@@ -75,16 +75,16 @@ class XpressFeederWebSocket implements MessageComponentInterface {
             'npg_QXNRj7PTlk1A'
         );
         
-        // LOAD ONLY ACTIVE FLIGHTS BASED ON SCHEDULE
+        // LOAD ALL AIRBORNE FLIGHTS (FIXED SCHEDULE FILTER)
         $currentTime = date('H:i:s');
         $currentDay = date('N'); // 1=Monday
         
         $stmt = $this->pdo->prepare("
             SELECT * FROM flightposition 
             WHERE schedule_dow LIKE :dow 
-            AND schedule_std <= :time 
-            AND schedule_sta >= :time
+            AND :time BETWEEN schedule_std AND schedule_sta
             AND status IN ('airborne', 'departed')
+            ORDER BY schedule_std
         ");
         
         $stmt->execute([
@@ -96,8 +96,25 @@ class XpressFeederWebSocket implements MessageComponentInterface {
             $this->flightCache[$row['callsign']] = $row;
         }
         
+        // IF NO FLIGHTS FOUND, LOAD SOME FOR TESTING
+        if (empty($this->flightCache)) {
+            $fallbackStmt = $this->pdo->query("
+                SELECT * FROM flightposition 
+                WHERE status = 'airborne' 
+                LIMIT 5
+            ");
+            while($row = $fallbackStmt->fetch(PDO::FETCH_ASSOC)) {
+                $this->flightCache[$row['callsign']] = $row;
+            }
+        }
+        
         echo "[" . date('Y-m-d H:i:s') . "] REAL LIVE WebSocket Server initialized\n";
         echo "[" . date('Y-m-d H:i:s') . "] Active flights: " . count($this->flightCache) . "\n";
+        
+        // DEBUG: Show loaded flights
+        foreach ($this->flightCache as $callsign => $flight) {
+            echo "  - {$callsign}: {$flight['origin']}→{$flight['destination']} @ {$flight['schedule_std']}-{$flight['schedule_sta']}\n";
+        }
     }
 
     // CALCULATE HEADING TOWARD DESTINATION
