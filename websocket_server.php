@@ -33,6 +33,27 @@ class XpressFeederWebSocket implements MessageComponentInterface {
         // END ADDED
         
         echo "[" . date('Y-m-d H:i:s') . "] REAL LIVE WebSocket Server initialized\n";
+        echo "[" . date('Y-m-d H:i:s') . "] Loaded " . count($this->flightCache) . " flights\n";
+    }
+
+    // ADDED: UPDATE FLIGHT POSITIONS
+    public function updateFlightPositions() {
+        foreach ($this->flightCache as $callsign => &$flight) {
+            if ($flight['status'] === 'airborne') {
+                // Move flight toward destination
+                $flight['lat'] = (float)$flight['lat'] + 0.01;
+                $flight['lon'] = (float)$flight['lon'] + 0.01;
+                $flight['last_update'] = date('Y-m-d H:i:s');
+                
+                // Broadcast update
+                $this->broadcast(json_encode([
+                    'type' => 'flight_position',
+                    'data' => $flight
+                ]));
+                
+                echo "[" . date('H:i:s') . "] Moved: {$callsign}\n";
+            }
+        }
     }
 
     // NEW: Accept HTTP POST updates from flight sources
@@ -163,12 +184,12 @@ try {
     $host = '0.0.0.0';
 
     echo "\n========================================\n";
-    echo "XPRESS FEEDER REAL LIVE WEBSOCKET SERVER\n";
+    echo "XPRESS FEEDER REAL LIVE WebSocket Server\n";
     echo "========================================\n";
     echo "Host: {$host}\n";
     echo "Port: {$port}\n";
     echo "Started: " . date('Y-m-d H:i:s') . "\n";
-    echo "Mode: INSTANT REAL-TIME PUSH\n";
+    echo "Mode: INSTANT REAL-TIME MOVING FLIGHTS\n";
     echo "========================================\n\n";
 
     $websocket = new XpressFeederWebSocket();
@@ -181,6 +202,11 @@ try {
         $port,
         $host
     );
+
+    // ADDED: UPDATE FLIGHTS EVERY 5 SECONDS
+    $server->loop->addPeriodicTimer(5, function() use ($websocket) {
+        $websocket->updateFlightPositions();
+    });
 
     // Add HTTP POST handler for flight pushes
     $server->socket->on('connection', function($socket) use ($websocket) {
