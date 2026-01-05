@@ -20,22 +20,19 @@ class XpressFeederWebSocket implements MessageComponentInterface {
     public function __construct() {
         $this->clients = new \SplObjectStorage;
         
-        // === ADDED: DATABASE CONNECTION ===
+        // === START ADDED DATABASE CODE ===
         $this->pdo = new PDO(
-            'mysql:host=localhost;dbname=xfeed306_flightops;charset=utf8mb4',
-            'xfeed306_admin',
-            '(v9CH)}Q4O2cbWCm'
+            'pgsql:host=ep-orange-lab-af9er9mv-pooler.c-2.us-west-2.aws.neon.tech;dbname=neondb',
+            'neondb_owner',
+            'npg_QXNRj7PTlk1A'
         );
-        
-        // === ADDED: LOAD REAL FLIGHTS ===
         $stmt = $this->pdo->query("SELECT * FROM flightposition");
         while($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
             $this->flightCache[$row['callsign']] = $row;
         }
-        // === END ADDED ===
+        // === END ADDED DATABASE CODE ===
         
         echo "[" . date('Y-m-d H:i:s') . "] REAL LIVE WebSocket Server initialized\n";
-        echo "[" . date('Y-m-d H:i:s') . "] Loaded " . count($this->flightCache) . " real flights\n";
     }
 
     // NEW: Accept HTTP POST updates from flight sources
