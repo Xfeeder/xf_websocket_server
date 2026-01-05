@@ -11,7 +11,7 @@ FROM php:8.2-cli
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
       libpq-dev libzip-dev zip unzip git \
-      default-mysql-client libmysqlclient-dev && \
+      default-mysql-client libmysqlclient-dev curl && \
     docker-php-ext-install pdo pdo_pgsql pgsql pdo_mysql mysqli && \
     rm -rf /var/lib/apt/lists/*
 
@@ -24,9 +24,9 @@ COPY . .
 # Create directory for logs
 RUN mkdir -p /app/logs && chmod 777 /app/logs
 
-# Health check
+# Health check for Render
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-  CMD php -r "echo 'Health check';" || exit 1
+  CMD curl -f http://localhost:10000/health || exit 1
 
 EXPOSE 10000
 CMD ["php", "server.php"]
