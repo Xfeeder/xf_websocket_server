@@ -7,11 +7,12 @@ RUN composer install --no-dev --prefer-dist --optimize-autoloader --ignore-platf
 # Stage 2: runtime image
 FROM php:8.2-cli
 
-# Install PostgreSQL extensions
+# Install PostgreSQL and MySQL extensions
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-      libpq-dev libzip-dev zip unzip git && \
-    docker-php-ext-install pdo pdo_pgsql pgsql && \
+      libpq-dev libzip-dev zip unzip git \
+      default-mysql-client libmysqlclient-dev && \
+    docker-php-ext-install pdo pdo_pgsql pgsql pdo_mysql mysqli && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -20,5 +21,12 @@ WORKDIR /app
 COPY --from=vendor /app/vendor ./vendor
 COPY . .
 
-EXPOSE 8080
-CMD ["php", "websocket_server.php"]
+# Create directory for logs
+RUN mkdir -p /app/logs && chmod 777 /app/logs
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+  CMD php -r "echo 'Health check';" || exit 1
+
+EXPOSE 10000
+CMD ["php", "server.php"]
