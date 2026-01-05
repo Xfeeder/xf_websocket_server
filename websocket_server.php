@@ -15,12 +15,12 @@ require __DIR__ . '/vendor/autoload.php';
 class XpressFeederWebSocket implements MessageComponentInterface {
     protected $clients;
     protected $flightCache = []; // Cache last positions
-    protected $pdo; // ADDED: Database connection
+    protected $pdo; // ADDED
 
     public function __construct() {
         $this->clients = new \SplObjectStorage;
         
-        // === START ADDED DATABASE CODE ===
+        // === ADDED DATABASE CONNECTION ===
         $this->pdo = new PDO(
             'pgsql:host=ep-orange-lab-af9er9mv-pooler.c-2.us-west-2.aws.neon.tech;dbname=neondb',
             'neondb_owner',
@@ -30,7 +30,7 @@ class XpressFeederWebSocket implements MessageComponentInterface {
         while($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
             $this->flightCache[$row['callsign']] = $row;
         }
-        // === END ADDED DATABASE CODE ===
+        // === END ADDED ===
         
         echo "[" . date('Y-m-d H:i:s') . "] REAL LIVE WebSocket Server initialized\n";
     }
