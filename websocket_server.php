@@ -19,20 +19,20 @@ class XpressFeederWebSocket implements MessageComponentInterface {
     
     // Airport coordinates for movement calculation
     protected $airports = [
-        'YYJ' => ['lat' => 48.646, 'lon' => -123.426],
-        'YVR' => ['lat' => 49.194, 'lon' => -123.183],
-        'YCD' => ['lat' => 49.052, 'lon' => -123.870],
-        'YQQ' => ['lat' => 49.711, 'lon' => -124.887],
-        'YBL' => ['lat' => 49.951, 'lon' => -125.271],
-        'YPW' => ['lat' => 49.834, 'lon' => -124.500],
-        'YPR' => ['lat' => 54.286, 'lon' => -130.445],
-        'YZP' => ['lat' => 53.254, 'lon' => -131.814],
-        'ZMT' => ['lat' => 54.027, 'lon' => -132.125],
-        'YZT' => ['lat' => 50.681, 'lon' => -127.367],
-        'ZEL' => ['lat' => 52.185, 'lon' => -128.157],
-        'QBC' => ['lat' => 52.387, 'lon' => -126.596],
-        'YAZ' => ['lat' => 49.082, 'lon' => -125.772],
-        'YHS' => ['lat' => 49.460, 'lon' => -123.719]
+        'YYJ' => ['lat' => 48.646, 'lon' => -123.426, 'name' => 'Victoria International Airport'],
+        'YVR' => ['lat' => 49.194, 'lon' => -123.183, 'name' => 'Vancouver International Airport'],
+        'YCD' => ['lat' => 49.052, 'lon' => -123.870, 'name' => 'Nanaimo Airport'],
+        'YQQ' => ['lat' => 49.711, 'lon' => -124.887, 'name' => 'Comox Valley Airport'],
+        'YBL' => ['lat' => 49.951, 'lon' => -125.271, 'name' => 'Campbell River Airport'],
+        'YPW' => ['lat' => 49.834, 'lon' => -124.500, 'name' => 'Powell River Airport'],
+        'YPR' => ['lat' => 54.286, 'lon' => -130.445, 'name' => 'Prince Rupert Airport'],
+        'YZP' => ['lat' => 53.254, 'lon' => -131.814, 'name' => 'Sandspit Airport'],
+        'ZMT' => ['lat' => 54.027, 'lon' => -132.125, 'name' => 'Masset Airport'],
+        'YZT' => ['lat' => 50.681, 'lon' => -127.367, 'name' => 'Port Hardy Airport'],
+        'ZEL' => ['lat' => 52.185, 'lon' => -128.157, 'name' => 'Bella Bella Airport'],
+        'QBC' => ['lat' => 52.387, 'lon' => -126.596, 'name' => 'Bella Coola Airport'],
+        'YAZ' => ['lat' => 49.082, 'lon' => -125.772, 'name' => 'Tofino Airport'],
+        'YHS' => ['lat' => 49.460, 'lon' => -123.719, 'name' => 'Sechelt Airport']
     ];
     
     // Piper PA-31-350 Chieftain Freighter Specifications
@@ -68,28 +68,28 @@ class XpressFeederWebSocket implements MessageComponentInterface {
     public function __construct() {
         $this->clients = new \SplObjectStorage;
         
-        
-        // DATABASE CONNECTION WITH ENVIRONMENT VARIABLES
-$dbHost = getenv('DB_HOST') ?: 'ep-orange-lab-af9er9mv-pooler.c-2.us-west-2.aws.neon.tech';
-$dbName = getenv('DB_NAME') ?: 'neondb';
-$dbUser = getenv('DB_USER') ?: 'neondb_owner';
-$dbPass = getenv('DB_PASSWORD') ?: 'npg_QXNRj7PTlk1A';
+        // DATABASE CONNECTION WITH ENVIRONMENT VARIABLES - FIXED
+        $dbHost = getenv('DB_HOST') ?: 'ep-orange-lab-af9er9mv-pooler.c-2.us-west-2.aws.neon.tech';
+        $dbName = getenv('DB_NAME') ?: 'neondb';
+        $dbUser = getenv('DB_USER') ?: 'neondb_owner';
+        $dbPass = getenv('DB_PASSWORD') ?: 'npg_QXNRj7PTlk1A';
 
-$this->pdo = new PDO(
-    "pgsql:host={$dbHost};dbname={$dbName}",
-    $dbUser,
-    $dbPass,
-    [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]
-);
+        $this->pdo = new PDO(
+            "pgsql:host={$dbHost};dbname={$dbName}",
+            $dbUser,
+            $dbPass,
+            [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]
+        );
         
-        // LOAD ALL AIRBORNE FLIGHTS (FIXED SCHEDULE FILTER)
+        // LOAD ALL AIRBORNE FLIGHTS - SCHEDULE LOGIC FIXED
         $currentTime = date('H:i:s');
         $currentDay = date('N'); // 1=Monday
         
         $stmt = $this->pdo->prepare("
             SELECT * FROM flightposition 
             WHERE schedule_dow LIKE :dow 
-            AND :time BETWEEN schedule_std AND schedule_sta
+            AND schedule_std <= :time  -- FIXED: Changed FROM BETWEEN
+            AND schedule_sta >= :time  -- FIXED: Changed TO <= and >=
             AND status IN ('airborne', 'departed')
             ORDER BY schedule_std
         ");
@@ -172,11 +172,11 @@ $this->pdo = new PDO(
             ");
             
             $stmt->execute([
-                ':lat' => $flight['lat'],
-                ':lon' => $flight['lon'],
-                ':altitude' => $flight['altitude'],
-                ':heading' => $flight['heading'],
-                ':groundspeed' => $flight['groundspeed'],
+                ':lat' => (float)$flight['lat'],
+                ':lon' => (float)$flight['lon'],
+                ':altitude' => (int)$flight['altitude'],
+                ':heading' => (int)$flight['heading'],
+                ':groundspeed' => (int)$flight['groundspeed'],
                 ':callsign' => $flight['callsign']
             ]);
             
@@ -210,16 +210,16 @@ $this->pdo = new PDO(
                 $flight['lat'] = $this->interpolateLat($origin['lat'], $dest['lat'], $progress);
                 $flight['lon'] = $this->interpolateLon($origin['lon'], $dest['lon'], $progress, $origin['lat'], $dest['lat']);
                 
-                // REALISTIC PIPER PA-31-350 ALTITUDE PROFILE
+                // REALISTIC PIPER PA-31-350 ALTITUDE PROFILE (CAST TO INT)
                 if ($progress < 0.15) {
                     // Climb phase (1200 fpm Piper climb rate)
-                    $flight['altitude'] = min(12000, 1000 + ($progress / 0.15) * 11000);
+                    $flight['altitude'] = (int)round(min(12000, 1000 + ($progress / 0.15) * 11000));
                 } elseif ($progress > 0.85) {
                     // Descent phase (800 fpm descent)
-                    $flight['altitude'] = 12000 - (($progress - 0.85) / 0.15) * 11000;
+                    $flight['altitude'] = (int)round(12000 - (($progress - 0.85) / 0.15) * 11000);
                 } else {
                     // Cruise at 10,000-12,000 ft (optimal for PA-31-350)
-                    $flight['altitude'] = 11000 + rand(-500, 500);
+                    $flight['altitude'] = (int)(11000 + rand(-500, 500));
                 }
                 
                 // PIPER CRUISE SPEED CALCULATION
@@ -228,12 +228,12 @@ $this->pdo = new PDO(
                 $altitudeFactor = 1 + (($currentAltitude / 1000) * 0.02);
                 $trueAirspeed = $specs['cruise_speed'] * $altitudeFactor;
                 
-                // Groundspeed with wind component
+                // Groundspeed with wind component (CAST TO INT)
                 $windComponent = rand(-10, 10);
                 $flight['groundspeed'] = (int)($trueAirspeed + $windComponent);
                 
-                // Heading toward destination
-                $flight['heading'] = $this->calculateHeading($flight['lat'], $flight['lon'], $dest['lat'], $dest['lon']);
+                // Heading toward destination (CAST TO INT)
+                $flight['heading'] = (int)$this->calculateHeading($flight['lat'], $flight['lon'], $dest['lat'], $dest['lon']);
                 $flight['last_update'] = date('Y-m-d H:i:s');
                 
                 // Update database
@@ -371,8 +371,8 @@ class FlightPushHandler implements \Ratchet\Http\HttpServerInterface {
 }
 
 try {
+    // PORT CONFIGURATION WITH VALIDATION - FIXED
     $port = (int)(getenv('PORT') ?: 10000);
-    // Ensure port is valid for Render
     if ($port < 1 || $port > 65535) {
         $port = 10000;
     }
@@ -404,26 +404,37 @@ try {
         $websocket->updateFlightPositions();
     });
 
-    // HTTP POST handler
-$server->socket->on('connection', function($socket) use ($websocket) {
-    $socket->on('data', function($data) use ($websocket, $socket) {
-        // HEALTH CHECK for Render
-        if (strpos($data, 'GET /health') !== false) {
-            $response = "HTTP/1.1 200 OK\r\n";
-            $response .= "Content-Type: application/json\r\n\r\n";
-            $response .= json_encode([
-                'status' => 'healthy',
-                'server' => 'Xpress Feeder WebSocket',
-                'timestamp' => date('Y-m-d H:i:s'),
-                'active_clients' => count($websocket->clients),
-                'active_flights' => count($websocket->flightCache)
-            ]);
-            $socket->write($response);
-            $socket->end();
-            return;
-        }
-        
-        if (strpos($data, 'POST /push_flight') !== false) {
+    // HTTP POST HANDLER WITH HEALTH CHECK - FIXED
+    $server->socket->on('connection', function($socket) use ($websocket) {
+        $socket->on('data', function($data) use ($websocket, $socket) {
+            // HEALTH CHECK for Render - FIXED
+            if (strpos($data, 'GET /health') !== false) {
+                $response = "HTTP/1.1 200 OK\r\n";
+                $response .= "Content-Type: application/json\r\n\r\n";
+                $response .= json_encode([
+                    'status' => 'healthy',
+                    'server' => 'Xpress Feeder WebSocket',
+                    'timestamp' => date('Y-m-d H:i:s'),
+                    'active_clients' => count($websocket->clients),
+                    'active_flights' => count($websocket->flightCache)
+                ]);
+                $socket->write($response);
+                $socket->end();
+                return;
+            }
+            
+            if (strpos($data, 'POST /push_flight') !== false) {
+                $lines = explode("\r\n", $data);
+                $body = end($lines);
+                $flightData = json_decode($body, true);
+                
+                if ($flightData) {
+                    $websocket->handleFlightUpdate($flightData);
+                    
+                    $response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n" . 
+                                json_encode(['status' => 'ok', 'received' => microtime(true)]);
+                    $socket->write($response);
+                    $socket->end();
                 }
             }
         });
@@ -435,5 +446,3 @@ $server->socket->on('connection', function($socket) use ($websocket) {
     echo "\n[ERROR] " . $e->getMessage() . "\n";
     exit(1);
 }
-
-
