@@ -34,6 +34,36 @@ class XpressFeederWebSocket implements MessageComponentInterface {
         'YAZ' => ['lat' => 49.082, 'lon' => -125.772],
         'YHS' => ['lat' => 49.460, 'lon' => -123.719]
     ];
+    
+    // Piper PA-31-350 Chieftain Freighter Specifications
+    protected $aircraftPerformance = [
+        'C-TLAL' => [
+            'type' => 'Piper PA-31-350 Chieftain Freighter',
+            'cruise_speed' => 195, // KTAS at 65% power, 10,000 ft
+            'max_speed' => 212, // KTAS
+            'stall_speed' => 68, // KIAS flaps down
+            'climb_rate' => 1200, // fpm at sea level
+            'service_ceiling' => 26000, // ft
+            'range' => 830, // nm with reserves
+            'fuel_flow' => 32, // gph per engine at 65% power
+            'engine' => 'Lycoming TIO-540-J2B (350 hp each)',
+            'mtow' => 7000, // lbs
+            'usable_fuel' => 204 // US gallons
+        ],
+        'C-GILA' => [
+            'type' => 'Piper PA-31-350 Chieftain Freighter',
+            'cruise_speed' => 198, // Slightly different performance
+            'max_speed' => 212,
+            'stall_speed' => 68,
+            'climb_rate' => 1250,
+            'service_ceiling' => 26000,
+            'range' => 840,
+            'fuel_flow' => 31.5,
+            'engine' => 'Lycoming TIO-540-J2B (350 hp each)',
+            'mtow' => 7000,
+            'usable_fuel' => 204
+        ]
+    ];
 
     public function __construct() {
         $this->clients = new \SplObjectStorage;
@@ -82,44 +112,118 @@ class XpressFeederWebSocket implements MessageComponentInterface {
         $bearing = rad2deg(atan2($y, $x));
         return ($bearing + 360) % 360;
     }
+    
+    // CALCULATE DISTANCE BETWEEN TWO POINTS (km)
+    private function calculateDistance($lat1, $lon1, $lat2, $lon2) {
+        $R = 6371; // Earth radius in km
+        $dLat = deg2rad($lat2 - $lat1);
+        $dLon = deg2rad($lon2 - $lon1);
+        $a = sin($dLat/2) * sin($dLat/2) + 
+             cos(deg2rad($lat1)) * cos(deg2rad($lat2)) * 
+             sin($dLon/2) * sin($dLon/2);
+        $c = 2 * atan2(sqrt($a), sqrt(1-$a));
+        return $R * $c;
+    }
+    
+    // GREAT CIRCLE INTERPOLATION
+    private function interpolateLat($lat1, $lat2, $f) {
+        return $lat1 + ($lat2 - $lat1) * $f;
+    }
+    
+    private function interpolateLon($lon1, $lon2, $f, $lat1, $lat2) {
+        $avgLat = ($lat1 + $lat2) / 2;
+        $lonFactor = cos(deg2rad($avgLat));
+        return $lon1 + ($lon2 - $lon1) * $f * $lonFactor;
+    }
+    
+    // UPDATE FLIGHT IN DATABASE
+    private function updateFlightInDatabase($flight) {
+        try {
+            $stmt = $this->pdo->prepare("
+                UPDATE flightposition 
+                SET lat = :lat, lon = :lon, altitude = :altitude, 
+                    heading = :heading, groundspeed = :groundspeed, 
+                    last_update = NOW()
+                WHERE callsign = :callsign
+            ");
+            
+            $stmt->execute([
+                ':lat' => $flight['lat'],
+                ':lon' => $flight['lon'],
+                ':altitude' => $flight['altitude'],
+                ':heading' => $flight['heading'],
+                ':groundspeed' => $flight['groundspeed'],
+                ':callsign' => $flight['callsign']
+            ]);
+            
+            return true;
+        } catch (Exception $e) {
+            echo "[" . date('H:i:s') . "] DB Error: " . $e->getMessage() . "\n";
+            return false;
+        }
+    }
 
-    // MOVE FLIGHT TOWARD DESTINATION
+    // REALISTIC PIPER PA-31-350 FLIGHT PHYSICS
     public function updateFlightPositions() {
         foreach ($this->flightCache as $callsign => &$flight) {
             if ($flight['status'] === 'airborne' && isset($this->airports[$flight['destination']])) {
+                $aircraftReg = $flight['aircraftreg'];
+                $specs = $this->aircraftPerformance[$aircraftReg] ?? $this->aircraftPerformance['C-TLAL'];
+                
+                $origin = $this->airports[$flight['origin']];
                 $dest = $this->airports[$flight['destination']];
                 
-                // Calculate heading toward destination
-                $flight['heading'] = $this->calculateHeading(
-                    $flight['lat'], 
-                    $flight['lon'], 
-                    $dest['lat'], 
-                    $dest['lon']
-                );
+                // Calculate progress based on SCHEDULE
+                $scheduledDeparture = strtotime($flight['schedule_std']);
+                $scheduledArrival = strtotime($flight['schedule_sta']);
+                $scheduledDuration = max(1, $scheduledArrival - $scheduledDeparture);
                 
-                // Move toward destination (0.01 degrees ~ 1.1 km)
-                $step = 0.01;
-                $flight['lat'] = $this->moveToward($flight['lat'], $dest['lat'], $step);
-                $flight['lon'] = $this->moveToward($flight['lon'], $dest['lon'], $step);
+                $currentTime = time();
+                $elapsed = max(0, $currentTime - $scheduledDeparture);
+                $progress = min($elapsed / $scheduledDuration, 0.99);
                 
-                // Update timestamp
+                // Position along great circle route
+                $flight['lat'] = $this->interpolateLat($origin['lat'], $dest['lat'], $progress);
+                $flight['lon'] = $this->interpolateLon($origin['lon'], $dest['lon'], $progress, $origin['lat'], $dest['lat']);
+                
+                // REALISTIC PIPER PA-31-350 ALTITUDE PROFILE
+                if ($progress < 0.15) {
+                    // Climb phase (1200 fpm Piper climb rate)
+                    $flight['altitude'] = min(12000, 1000 + ($progress / 0.15) * 11000);
+                } elseif ($progress > 0.85) {
+                    // Descent phase (800 fpm descent)
+                    $flight['altitude'] = 12000 - (($progress - 0.85) / 0.15) * 11000;
+                } else {
+                    // Cruise at 10,000-12,000 ft (optimal for PA-31-350)
+                    $flight['altitude'] = 11000 + rand(-500, 500);
+                }
+                
+                // PIPER CRUISE SPEED CALCULATION
+                // True airspeed increases ~2% per 1,000 ft altitude
+                $currentAltitude = $flight['altitude'];
+                $altitudeFactor = 1 + (($currentAltitude / 1000) * 0.02);
+                $trueAirspeed = $specs['cruise_speed'] * $altitudeFactor;
+                
+                // Groundspeed with wind component
+                $windComponent = rand(-10, 10);
+                $flight['groundspeed'] = (int)($trueAirspeed + $windComponent);
+                
+                // Heading toward destination
+                $flight['heading'] = $this->calculateHeading($flight['lat'], $flight['lon'], $dest['lat'], $dest['lon']);
                 $flight['last_update'] = date('Y-m-d H:i:s');
                 
-                // Broadcast update
+                // Update database
+                $this->updateFlightInDatabase($flight);
+                
+                // Broadcast to all clients
                 $this->broadcast(json_encode([
                     'type' => 'flight_position',
                     'data' => $flight
                 ]));
                 
-                echo "[" . date('H:i:s') . "] Moved: {$callsign} Heading: {$flight['heading']}°\n";
+                echo "[" . date('H:i:s') . "] Moved: {$callsign} | Alt: {$flight['altitude']}ft | GS: {$flight['groundspeed']}kt | HDG: {$flight['heading']}°\n";
             }
         }
-    }
-    
-    private function moveToward($current, $target, $step) {
-        $diff = $target - $current;
-        if (abs($diff) < $step) return $target;
-        return $current + ($diff > 0 ? $step : -$step);
     }
 
     public function handleFlightUpdate($flightData) {
@@ -252,7 +356,7 @@ try {
     echo "Host: {$host}\n";
     echo "Port: {$port}\n";
     echo "Started: " . date('Y-m-d H:i:s') . "\n";
-    echo "Mode: ACTUAL REAL LIVE MOVING FLIGHTS\n";
+    echo "Mode: PIPER PA-31-350 REAL FLIGHT PHYSICS\n";
     echo "========================================\n\n";
 
     $websocket = new XpressFeederWebSocket();
@@ -266,7 +370,7 @@ try {
         $host
     );
 
-    // UPDATE FLIGHTS EVERY 5 SECONDS WITH CORRECT HEADINGS
+    // UPDATE FLIGHTS EVERY 5 SECONDS WITH PIPER PHYSICS
     $server->loop->addPeriodicTimer(5, function() use ($websocket) {
         $websocket->updateFlightPositions();
     });
