@@ -15,10 +15,27 @@ require __DIR__ . '/vendor/autoload.php';
 class XpressFeederWebSocket implements MessageComponentInterface {
     protected $clients;
     protected $flightCache = []; // Cache last positions
+    protected $pdo; // ADDED: Database connection
 
     public function __construct() {
         $this->clients = new \SplObjectStorage;
+        
+        // === ADDED: DATABASE CONNECTION ===
+        $this->pdo = new PDO(
+            'mysql:host=localhost;dbname=xfeed306_flightops;charset=utf8mb4',
+            'xfeed306_admin',
+            '(v9CH)}Q4O2cbWCm'
+        );
+        
+        // === ADDED: LOAD REAL FLIGHTS ===
+        $stmt = $this->pdo->query("SELECT * FROM flightposition");
+        while($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+            $this->flightCache[$row['callsign']] = $row;
+        }
+        // === END ADDED ===
+        
         echo "[" . date('Y-m-d H:i:s') . "] REAL LIVE WebSocket Server initialized\n";
+        echo "[" . date('Y-m-d H:i:s') . "] Loaded " . count($this->flightCache) . " real flights\n";
     }
 
     // NEW: Accept HTTP POST updates from flight sources
