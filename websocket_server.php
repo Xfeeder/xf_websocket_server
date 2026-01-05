@@ -405,20 +405,25 @@ try {
     });
 
     // HTTP POST handler
-    $server->socket->on('connection', function($socket) use ($websocket) {
-        $socket->on('data', function($data) use ($websocket, $socket) {
-            if (strpos($data, 'POST /push_flight') !== false) {
-                $lines = explode("\r\n", $data);
-                $body = end($lines);
-                $flightData = json_decode($body, true);
-                
-                if ($flightData) {
-                    $websocket->handleFlightUpdate($flightData);
-                    
-                    $response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n" . 
-                                json_encode(['status' => 'ok', 'received' => microtime(true)]);
-                    $socket->write($response);
-                    $socket->end();
+$server->socket->on('connection', function($socket) use ($websocket) {
+    $socket->on('data', function($data) use ($websocket, $socket) {
+        // HEALTH CHECK for Render
+        if (strpos($data, 'GET /health') !== false) {
+            $response = "HTTP/1.1 200 OK\r\n";
+            $response .= "Content-Type: application/json\r\n\r\n";
+            $response .= json_encode([
+                'status' => 'healthy',
+                'server' => 'Xpress Feeder WebSocket',
+                'timestamp' => date('Y-m-d H:i:s'),
+                'active_clients' => count($websocket->clients),
+                'active_flights' => count($websocket->flightCache)
+            ]);
+            $socket->write($response);
+            $socket->end();
+            return;
+        }
+        
+        if (strpos($data, 'POST /push_flight') !== false) {
                 }
             }
         });
@@ -430,4 +435,5 @@ try {
     echo "\n[ERROR] " . $e->getMessage() . "\n";
     exit(1);
 }
+
 
