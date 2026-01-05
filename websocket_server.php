@@ -1,7 +1,7 @@
 <?php
 /**
- * Xpress Feeder Airline - Central WebSocket Server (Render)
- * Monitors live MySQL database every 1 second
+ * Xpress Feeder Airline - REAL LIVE WebSocket Server
+ * Receives INSTANT flight updates via POST/PUSH
  */
 
 use Ratchet\Server\IoServer;
@@ -14,122 +14,50 @@ require __DIR__ . '/vendor/autoload.php';
 
 class XpressFeederWebSocket implements MessageComponentInterface {
     protected $clients;
-    protected $users;
-    protected $subscriptions;
-    protected $db;
-    protected $lastChecked = [];
-
-    const DEPT_FLIGHTOPS   = 'flightops';
-    const DEPT_MAINTENANCE = 'maintenance';
+    protected $flightCache = []; // Cache last positions
 
     public function __construct() {
         $this->clients = new \SplObjectStorage;
-        $this->users   = [];
-        $this->subscriptions = [
-            'flights'     => [],
-            'aircraft'    => [],
-            'departments' => []
-        ];
-
-        $this->initDatabase();
-        echo "[" . date('Y-m-d H:i:s') . "] WebSocket Server initialized with 1-second monitoring\n";
+        echo "[" . date('Y-m-d H:i:s') . "] REAL LIVE WebSocket Server initialized\n";
     }
 
-    private function initDatabase() {
-        try {
-            $host = getenv('DB_HOST') ?: 'xfeeder.xyz';
-            $name = getenv('DB_NAME') ?: 'xfeed306_flightops';
-            $user = getenv('DB_USER') ?: 'xfeed306_admin';
-            $pass = getenv('DB_PASS') ?: '(v9CH)}Q4O2cbWCm';
-            $port = getenv('DB_PORT') ?: 3306;
-
-            $this->db = new PDO(
-                "mysql:host={$host};port={$port};dbname={$name};charset=utf8mb4",
-                $user,
-                $pass,
-                [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]
-            );
-
-            echo "[" . date('Y-m-d H:i:s') . "] ✓ Database connected: {$host}/{$name}\n";
-            
-            $this->lastChecked['flights'] = date('Y-m-d H:i:s', strtotime('-5 seconds'));
-            $this->lastChecked['maintenance'] = date('Y-m-d H:i:s', strtotime('-5 seconds'));
-            
-        } catch (PDOException $e) {
-            echo "[" . date('Y-m-d H:i:s') . "] ✗ Database error: " . $e->getMessage() . "\n";
-            $this->db = null;
-        }
-    }
-
-    public function monitorDatabase() {
-        if (!$this->db) return;
-
-        try {
-            // Monitor flights
-            $stmt = $this->db->prepare("SELECT * FROM flight_schedule WHERE updated_at > ? LIMIT 20");
-            $stmt->execute([$this->lastChecked['flights']]);
-            
-            while ($row = $stmt->fetch()) {
-                $this->broadcastFlightUpdate($row);
-            }
-            $this->lastChecked['flights'] = date('Y-m-d H:i:s');
-
-            // Monitor maintenance
-            $stmt = $this->db->prepare("SELECT * FROM aircraft_mro WHERE updated_at > ? LIMIT 20");
-            $stmt->execute([$this->lastChecked['maintenance']]);
-            
-            while ($row = $stmt->fetch()) {
-                $this->broadcastMaintenanceUpdate($row);
-            }
-            $this->lastChecked['maintenance'] = date('Y-m-d H:i:s');
-            
-        } catch (PDOException $e) {
-            echo "[" . date('Y-m-d H:i:s') . "] Monitor error: " . $e->getMessage() . "\n";
-        }
-    }
-
-    private function broadcastFlightUpdate($data) {
+    // NEW: Accept HTTP POST updates from flight sources
+    public function handleFlightUpdate($flightData) {
+        // Store in cache
+        $callsign = $flightData['callsign'] ?? 'unknown';
+        $this->flightCache[$callsign] = $flightData;
+        
+        // Broadcast INSTANTLY to all connected clients
         $message = [
-            'type' => 'flight_status_change',
-            'flight_id' => $data['id'] ?? $data['flight_id'],
-            'flight_number' => $data['flight_number'] ?? null,
-            'status' => $data['status'] ?? null,
-            'aircraft_registration' => $data['aircraft_registration'] ?? null,
-            'timestamp' => date('Y-m-d H:i:s'),
-            'data' => $data
+            'type' => 'flight_position',
+            'data' => $flightData,
+            'timestamp' => microtime(true)
         ];
-
+        
         $this->broadcast($message);
-        echo "[" . date('Y-m-d H:i:s') . "] Flight update: " . ($message['flight_number'] ?? 'unknown') . "\n";
-    }
-
-    private function broadcastMaintenanceUpdate($data) {
-        $message = [
-            'type' => 'aircraft_maintenance',
-            'aircraft_registration' => $data['aircraft_registration'] ?? $data['registration'],
-            'status' => $data['status'] ?? 'In Maintenance',
-            'start_time' => $data['start_time'] ?? null,
-            'estimated_completion' => $data['estimated_completion'] ?? null,
-            'timestamp' => date('Y-m-d H:i:s'),
-            'data' => $data
-        ];
-
-        $this->broadcast($message);
-        echo "[" . date('Y-m-d H:i:s') . "] Maintenance update: " . $message['aircraft_registration'] . "\n";
+        echo "[" . date('Y-m-d H:i:s') . "] REAL-TIME update: {$callsign}\n";
     }
 
     public function onOpen(ConnectionInterface $conn) {
         $this->clients->attach($conn);
-        $conn->subscriptions = [];
+        $conn->resourceId = uniqid();
 
-        echo "[" . date('Y-m-d H:i:s') . "] New connection: {$conn->resourceId}\n";
+        echo "[" . date('Y-m-d H:i:s') . "] New REAL LIVE client: {$conn->resourceId}\n";
+
+        // Send all cached flights immediately
+        foreach ($this->flightCache as $flight) {
+            $conn->send(json_encode([
+                'type' => 'flight_position',
+                'data' => $flight
+            ]));
+        }
 
         $conn->send(json_encode([
             'type' => 'connection_established',
             'resource_id' => $conn->resourceId,
-            'server' => 'Xpress Feeder WebSocket (Render)',
+            'server' => 'Xpress Feeder REAL LIVE WebSocket',
             'timestamp' => date('Y-m-d H:i:s'),
-            'database_status' => $this->db ? 'connected' : 'disconnected'
+            'message' => 'REAL-TIME FLIGHT UPDATES ACTIVE'
         ]));
     }
 
@@ -141,38 +69,34 @@ class XpressFeederWebSocket implements MessageComponentInterface {
 
         switch ($type) {
             case 'auth':
-            case 'connect':
-                $from->userId = $data['user_id'] ?? 'guest';
-                $from->send(json_encode(['type' => 'auth_success', 'user_id' => $from->userId]));
+                $from->send(json_encode([
+                    'type' => 'auth_success', 
+                    'timestamp' => microtime(true)
+                ]));
                 break;
 
-            case 'subscribe_department':
-                $dept = $data['department'] ?? null;
-                if ($dept) {
-                    $from->subscriptions['dept_' . $dept] = true;
-                    $from->send(json_encode(['type' => 'subscription_success', 'department' => $dept]));
+            case 'subscribe_flights':
+                // Send all cached flights
+                foreach ($this->flightCache as $flight) {
+                    $from->send(json_encode([
+                        'type' => 'flight_position',
+                        'data' => $flight
+                    ]));
                 }
                 break;
 
-            case 'subscribe_aircraft':
-                $reg = $data['aircraft_registration'] ?? null;
-                if ($reg) {
-                    $from->subscriptions['aircraft_' . $reg] = true;
-                    $from->send(json_encode(['type' => 'subscription_success', 'aircraft_registration' => $reg]));
+            case 'flight_push':  // DIRECT flight push from source
+                if (isset($data['data'])) {
+                    $this->handleFlightUpdate($data['data']);
                 }
-                break;
-
-            case 'flight_position':
-                // Forward raw position data to all connected clients
-                $message = [
-                    'type' => 'flight_position',
-                    'data' => $data['data'] ?? []
-                ];
-                $this->broadcast($message);
                 break;
 
             case 'ping':
-                $from->send(json_encode(['type' => 'pong', 'timestamp' => time()]));
+                $from->send(json_encode([
+                    'type' => 'pong', 
+                    'timestamp' => microtime(true),
+                    'server_time' => date('H:i:s')
+                ]));
                 break;
         }
     }
@@ -186,7 +110,7 @@ class XpressFeederWebSocket implements MessageComponentInterface {
 
     public function onClose(ConnectionInterface $conn) {
         $this->clients->detach($conn);
-        echo "[" . date('Y-m-d H:i:s') . "] Connection closed: {$conn->resourceId}\n";
+        echo "[" . date('Y-m-d H:i:s') . "] Client disconnected: {$conn->resourceId}\n";
     }
 
     public function onError(ConnectionInterface $conn, \Exception $e) {
@@ -195,20 +119,47 @@ class XpressFeederWebSocket implements MessageComponentInterface {
     }
 }
 
+// HTTP endpoint to accept flight pushes
+class FlightPushHandler implements \Ratchet\Http\HttpServerInterface {
+    protected $websocket;
+
+    public function __construct(XpressFeederWebSocket $websocket) {
+        $this->websocket = $websocket;
+    }
+
+    public function onOpen(\Ratchet\ConnectionInterface $conn, \Psr\Http\Message\RequestInterface $request = null) {
+        // Handle WebSocket connections
+    }
+
+    public function onMessage(\Ratchet\ConnectionInterface $from, $msg) {
+        // Handle WebSocket messages
+    }
+
+    public function onClose(\Ratchet\ConnectionInterface $conn) {
+        // Handle WebSocket close
+    }
+
+    public function onError(\Ratchet\ConnectionInterface $conn, \Exception $e) {
+        // Handle errors
+    }
+}
+
 try {
     $port = getenv('PORT') ? (int)getenv('PORT') : 10000;
     $host = '0.0.0.0';
 
     echo "\n========================================\n";
-    echo "XPRESS FEEDER WEBSOCKET SERVER (Render)\n";
+    echo "XPRESS FEEDER REAL LIVE WEBSOCKET SERVER\n";
     echo "========================================\n";
     echo "Host: {$host}\n";
     echo "Port: {$port}\n";
     echo "Started: " . date('Y-m-d H:i:s') . "\n";
+    echo "Mode: INSTANT REAL-TIME PUSH\n";
     echo "========================================\n\n";
 
     $websocket = new XpressFeederWebSocket();
 
+    // Create HTTP server that also accepts POST requests
     $server = IoServer::factory(
         new HttpServer(
             new WsServer($websocket)
@@ -217,9 +168,30 @@ try {
         $host
     );
 
-    $loop = $server->loop;
-    $loop->addPeriodicTimer(1, function() use ($websocket) {
-        $websocket->monitorDatabase();
+    // Add HTTP POST handler for flight pushes
+    $server->socket->on('connection', function($socket) use ($websocket) {
+        $socket->on('data', function($data) use ($websocket, $socket) {
+            // Check if this is an HTTP POST request
+            if (strpos($data, 'POST /push_flight') !== false) {
+                // Parse flight data from POST body
+                $lines = explode("\r\n", $data);
+                $body = end($lines);
+                $flightData = json_decode($body, true);
+                
+                if ($flightData) {
+                    $websocket->handleFlightUpdate($flightData);
+                    
+                    // Send HTTP response
+                    $response = "HTTP/1.1 200 OK\r\n";
+                    $response .= "Content-Type: application/json\r\n";
+                    $response .= "\r\n";
+                    $response .= json_encode(['status' => 'ok', 'received' => microtime(true)]);
+                    
+                    $socket->write($response);
+                    $socket->end();
+                }
+            }
+        });
     });
 
     $server->run();
