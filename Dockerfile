@@ -11,7 +11,7 @@ FROM php:8.2-cli
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
       libpq-dev libzip-dev zip unzip git \
-      default-mysql-client libmariadb-dev curl && \  # CHANGED: libmysqlclient-dev → libmariadb-dev
+      default-mysql-client libmariadb-dev curl && \
     docker-php-ext-install pdo pdo_pgsql pgsql pdo_mysql mysqli && \
     rm -rf /var/lib/apt/lists/*
 
