@@ -561,7 +561,7 @@ class XpressFeederWebSocket implements MessageComponentInterface {
     }
     
     // FIXED HTTP PARSING FUNCTION
-    private function parseHttpRequest(string $raw): array {
+   public function parseRawHttpRequest(string $raw): array {
         $parts = preg_split("/\r\n\r\n/", $raw, 2);
         if (count($parts) < 2) {
             return ['headers' => [], 'body' => '', 'method' => '', 'path' => ''];
@@ -639,7 +639,7 @@ try {
             
             // Check if we have a complete HTTP request
             if (strpos($buffer, "\r\n\r\n") !== false) {
-                $request = $websocket->parseHttpRequest($buffer);
+                $request = $websocket->parseRawHttpRequest($buffer);
                 
                 // HEALTH CHECK endpoint
                 if ($request['method'] === 'GET' && strpos($request['path'], '/health') === 0) {
@@ -721,6 +721,7 @@ try {
     error_log("WebSocket Server Fatal Error: " . $e->getMessage() . "\n" . $e->getTraceAsString());
     exit(1);
 }
+
 
 
 
