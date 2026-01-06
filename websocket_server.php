@@ -17,7 +17,7 @@ class XpressFeederWebSocket implements MessageComponentInterface {
     protected $flightCache = []; // Cache last positions
     protected $pdo;
     
-    // Airport coordinates for movement calculation
+    // Airport coordinates with NAMES
     protected $airports = [
         'YYJ' => ['lat' => 48.646, 'lon' => -123.426, 'name' => 'Victoria International Airport'],
         'YVR' => ['lat' => 49.194, 'lon' => -123.183, 'name' => 'Vancouver International Airport'],
@@ -167,7 +167,7 @@ class XpressFeederWebSocket implements MessageComponentInterface {
                 UPDATE flightposition 
                 SET lat = :lat, lon = :lon, altitude = :altitude, 
                     heading = :heading, groundspeed = :groundspeed, 
-                    last_update = NOW()
+                    status = :status, last_update = NOW()
                 WHERE callsign = :callsign
             ");
             
@@ -177,6 +177,7 @@ class XpressFeederWebSocket implements MessageComponentInterface {
                 ':altitude' => (int)$flight['altitude'],
                 ':heading' => (int)$flight['heading'],
                 ':groundspeed' => (int)$flight['groundspeed'],
+                ':status' => $flight['status'],
                 ':callsign' => $flight['callsign']
             ]);
             
@@ -246,6 +247,18 @@ class XpressFeederWebSocket implements MessageComponentInterface {
                 ]));
                 
                 echo "[" . date('H:i:s') . "] Moved: {$callsign} | Alt: {$flight['altitude']}ft | GS: {$flight['groundspeed']}kt | HDG: {$flight['heading']}°\n";
+                
+                // Check if flight should have arrived
+                if ($progress >= 0.99) {
+                    $flight['status'] = 'arrived';
+                    $flight['lat'] = $dest['lat'];
+                    $flight['lon'] = $dest['lon'];
+                    $flight['altitude'] = 0;
+                    $flight['groundspeed'] = 0;
+                    $flight['heading'] = 0;
+                    $this->updateFlightInDatabase($flight);
+                    echo "[" . date('H:i:s') . "] {$callsign} has arrived at {$flight['destination']}\n";
+                }
             }
         }
     }
@@ -342,31 +355,6 @@ class XpressFeederWebSocket implements MessageComponentInterface {
     public function onError(ConnectionInterface $conn, \Exception $e) {
         echo "[" . date('Y-m-d H:i:s') . "] Error: {$e->getMessage()}\n";
         $conn->close();
-    }
-}
-
-// HTTP endpoint to accept flight pushes
-class FlightPushHandler implements \Ratchet\Http\HttpServerInterface {
-    protected $websocket;
-
-    public function __construct(XpressFeederWebSocket $websocket) {
-        $this->websocket = $websocket;
-    }
-
-    public function onOpen(\Ratchet\ConnectionInterface $conn, \Psr\Http\Message\RequestInterface $request = null) {
-        // Handle WebSocket connections
-    }
-
-    public function onMessage(\Ratchet\ConnectionInterface $from, $msg) {
-        // Handle WebSocket messages
-    }
-
-    public function onClose(\Ratchet\ConnectionInterface $conn) {
-        // Handle WebSocket close
-    }
-
-    public function onError(\Ratchet\ConnectionInterface $conn, \Exception $e) {
-        // Handle errors
     }
 }
 
