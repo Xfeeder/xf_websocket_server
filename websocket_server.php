@@ -1,7 +1,8 @@
 <?php
 /**
- * Xpress Feeder Airline - REAL LIVE WebSocket Server
+ * Xpress Feeder Airline - REAL LIVE WebSocket Server (SECURE PATCHED VERSION)
  * Receives INSTANT flight updates via POST/PUSH
+ * Patched with: Security fixes, Authentication, Proper error handling, etc.
  */
 
 use Ratchet\Server\IoServer;
@@ -16,6 +17,7 @@ class XpressFeederWebSocket implements MessageComponentInterface {
     protected $clients;
     protected $flightCache = []; // Cache last positions
     protected $pdo;
+    protected $clientAuthTokens = []; // Track authenticated clients
     
     // Airport coordinates with NAMES
     protected $airports = [
@@ -68,59 +70,96 @@ class XpressFeederWebSocket implements MessageComponentInterface {
     public function __construct() {
         $this->clients = new \SplObjectStorage;
         
-        // DATABASE CONNECTION WITH ENVIRONMENT VARIABLES - FIXED
-        $dbHost = getenv('DB_HOST') ?: 'ep-orange-lab-af9er9mv-pooler.c-2.us-west-2.aws.neon.tech';
-        $dbName = getenv('DB_NAME') ?: 'neondb';
-        $dbUser = getenv('DB_USER') ?: 'neondb_owner';
-        $dbPass = getenv('DB_PASSWORD') ?: 'npg_QXNRj7PTlk1A';
-
-        $this->pdo = new PDO(
-            "pgsql:host={$dbHost};dbname={$dbName}",
-            $dbUser,
-            $dbPass,
-            [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]
-        );
+        // DATABASE CONNECTION - NO HARDCODED CREDENTIALS (FIXED)
+        $this->initializeDatabase();
         
-        // LOAD ALL AIRBORNE FLIGHTS - SCHEDULE LOGIC FIXED
-        $currentTime = date('H:i:s');
-        $currentDay = date('N'); // 1=Monday
+        // LOAD ALL AIRBORNE FLIGHTS - SCHEDULE LOGIC WITH PROPER TIMEZONE (FIXED)
+        $this->loadActiveFlights();
         
-        $stmt = $this->pdo->prepare("
-            SELECT * FROM flightposition 
-            WHERE schedule_dow LIKE :dow 
-            AND schedule_std <= :time  -- FIXED: Changed FROM BETWEEN
-            AND schedule_sta >= :time  -- FIXED: Changed TO <= and >=
-            AND status IN ('airborne', 'departed')
-            ORDER BY schedule_std
-        ");
-        
-        $stmt->execute([
-            ':dow' => "%{$currentDay}%",
-            ':time' => $currentTime
-        ]);
-        
-        while($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
-            $this->flightCache[$row['callsign']] = $row;
-        }
-        
-        // IF NO FLIGHTS FOUND, LOAD SOME FOR TESTING
-        if (empty($this->flightCache)) {
-            $fallbackStmt = $this->pdo->query("
-                SELECT * FROM flightposition 
-                WHERE status = 'airborne' 
-                LIMIT 5
-            ");
-            while($row = $fallbackStmt->fetch(PDO::FETCH_ASSOC)) {
-                $this->flightCache[$row['callsign']] = $row;
-            }
-        }
-        
-        echo "[" . date('Y-m-d H:i:s') . "] REAL LIVE WebSocket Server initialized\n";
-        echo "[" . date('Y-m-d H:i:s') . "] Active flights: " . count($this->flightCache) . "\n";
+        echo "[" . $this->getUTCTime() . "] REAL LIVE WebSocket Server initialized\n";
+        echo "[" . $this->getUTCTime() . "] Active flights: " . count($this->flightCache) . "\n";
         
         // DEBUG: Show loaded flights
         foreach ($this->flightCache as $callsign => $flight) {
             echo "  - {$callsign}: {$flight['origin']}→{$flight['destination']} @ {$flight['schedule_std']}-{$flight['schedule_sta']}\n";
+        }
+    }
+    
+    private function getUTCTime(): string {
+        return (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))
+            ->format('Y-m-d H:i:s');
+    }
+    
+    private function initializeDatabase(): void {
+        // CRITICAL FIX: Require environment variables - NO DEFAULT PASSWORDS
+        $dbHost = getenv('DB_HOST');
+        $dbName = getenv('DB_NAME') ?: 'neondb';
+        $dbUser = getenv('DB_USER') ?: 'neondb_owner';
+        $dbPass = getenv('DB_PASSWORD');
+        
+        if (!$dbHost || !$dbUser || !$dbPass || !$dbName) {
+            throw new \RuntimeException(
+                'Database credentials are not set in environment variables. ' .
+                'Required: DB_HOST, DB_NAME, DB_USER, DB_PASSWORD'
+            );
+        }
+        
+        try {
+            $this->pdo = new PDO(
+                "pgsql:host={$dbHost};dbname={$dbName}",
+                $dbUser,
+                $dbPass,
+                [
+                    PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+                    PDO::ATTR_EMULATE_PREPARES => false, // Security fix
+                    PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+                    PDO::ATTR_TIMEOUT => 5,
+                    PDO::ATTR_PERSISTENT => false
+                ]
+            );
+        } catch (\PDOException $e) {
+            throw new \RuntimeException("Database connection failed: " . $e->getMessage());
+        }
+    }
+    
+    private function loadActiveFlights(): void {
+        $currentTimeUTC = (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))
+            ->format('H:i:s');
+        $currentDay = date('N'); // 1=Monday
+        
+        try {
+            $stmt = $this->pdo->prepare("
+                SELECT * FROM flightposition 
+                WHERE schedule_dow LIKE :dow 
+                AND schedule_std <= :time
+                AND schedule_sta >= :time
+                AND status IN ('airborne', 'departed')
+                ORDER BY schedule_std
+            ");
+            
+            $stmt->execute([
+                ':dow' => "%{$currentDay}%",
+                ':time' => $currentTimeUTC
+            ]);
+            
+            while($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+                $this->flightCache[$row['callsign']] = $row;
+            }
+            
+            // IF NO SCHEDULED FLIGHTS, LOAD ANY AIRBORNE
+            if (empty($this->flightCache)) {
+                $fallbackStmt = $this->pdo->query("
+                    SELECT * FROM flightposition 
+                    WHERE status = 'airborne' 
+                    LIMIT 5
+                ");
+                while($row = $fallbackStmt->fetch(PDO::FETCH_ASSOC)) {
+                    $this->flightCache[$row['callsign']] = $row;
+                }
+            }
+        } catch (\PDOException $e) {
+            error_log("Database error loading flights: " . $e->getMessage());
+            $this->flightCache = [];
         }
     }
 
@@ -134,7 +173,7 @@ class XpressFeederWebSocket implements MessageComponentInterface {
         $x = cos($lat1) * sin($lat2) - sin($lat1) * cos($lat2) * cos($dLon);
         
         $bearing = rad2deg(atan2($y, $x));
-        return ($bearing + 360) % 360;
+        return (int)(($bearing + 360) % 360);
     }
     
     // CALCULATE DISTANCE BETWEEN TWO POINTS (km)
@@ -160,47 +199,81 @@ class XpressFeederWebSocket implements MessageComponentInterface {
         return $lon1 + ($lon2 - $lon1) * $f * $lonFactor;
     }
     
-    // UPDATE FLIGHT IN DATABASE
+    // UPDATE FLIGHT IN DATABASE WITH PARAMETER BINDING (FIXED)
     private function updateFlightInDatabase($flight) {
         try {
             $stmt = $this->pdo->prepare("
                 UPDATE flightposition 
                 SET lat = :lat, lon = :lon, altitude = :altitude, 
                     heading = :heading, groundspeed = :groundspeed, 
-                    status = :status, last_update = NOW()
+                    status = :status, last_update = NOW() AT TIME ZONE 'UTC'
                 WHERE callsign = :callsign
             ");
             
             $stmt->execute([
                 ':lat' => (float)$flight['lat'],
                 ':lon' => (float)$flight['lon'],
-                ':altitude' => (int)$flight['altitude'],
-                ':heading' => (int)$flight['heading'],
-                ':groundspeed' => (int)$flight['groundspeed'],
+                ':altitude' => (int)($flight['altitude'] ?? 0),
+                ':heading' => (int)($flight['heading'] ?? 0),
+                ':groundspeed' => (int)($flight['groundspeed'] ?? 0),
                 ':status' => $flight['status'],
                 ':callsign' => $flight['callsign']
             ]);
             
-            return true;
-        } catch (Exception $e) {
-            echo "[" . date('H:i:s') . "] DB Error: " . $e->getMessage() . "\n";
+            return $stmt->rowCount() > 0;
+        } catch (\PDOException $e) {
+            error_log("[" . $this->getUTCTime() . "] DB Update Error: " . $e->getMessage());
             return false;
         }
+    }
+
+    // VALIDATE FLIGHT DATA INPUT (CRITICAL SECURITY FIX)
+    private function validateFlightData(array $data): ?array {
+        $required = ['callsign', 'lat', 'lon', 'status'];
+        foreach ($required as $field) {
+            if (!isset($data[$field]) || empty(trim($data[$field]))) {
+                return null;
+            }
+        }
+        
+        // Type validation
+        $validated = [
+            'callsign' => substr((string)$data['callsign'], 0, 10),
+            'lat' => filter_var($data['lat'], FILTER_VALIDATE_FLOAT, ['options' => ['min_range' => -90, 'max_range' => 90]]),
+            'lon' => filter_var($data['lon'], FILTER_VALIDATE_FLOAT, ['options' => ['min_range' => -180, 'max_range' => 180]]),
+            'status' => in_array($data['status'], ['scheduled', 'departed', 'airborne', 'arrived', 'cancelled']) ? $data['status'] : 'scheduled',
+            'altitude' => isset($data['altitude']) ? (int)$data['altitude'] : 0,
+            'groundspeed' => isset($data['groundspeed']) ? (int)$data['groundspeed'] : 0,
+            'heading' => isset($data['heading']) ? (int)$data['heading'] : 0
+        ];
+        
+        if ($validated['lat'] === false || $validated['lon'] === false) {
+            return null;
+        }
+        
+        // Optional fields
+        if (isset($data['origin'])) $validated['origin'] = substr((string)$data['origin'], 0, 4);
+        if (isset($data['destination'])) $validated['destination'] = substr((string)$data['destination'], 0, 4);
+        if (isset($data['aircraftreg'])) $validated['aircraftreg'] = substr((string)$data['aircraftreg'], 0, 10);
+        
+        $validated['last_update'] = $this->getUTCTime();
+        
+        return $validated;
     }
 
     // REALISTIC PIPER PA-31-350 FLIGHT PHYSICS
     public function updateFlightPositions() {
         foreach ($this->flightCache as $callsign => &$flight) {
             if ($flight['status'] === 'airborne' && isset($this->airports[$flight['destination']])) {
-                $aircraftReg = $flight['aircraftreg'];
+                $aircraftReg = $flight['aircraftreg'] ?? 'C-TLAL';
                 $specs = $this->aircraftPerformance[$aircraftReg] ?? $this->aircraftPerformance['C-TLAL'];
                 
-                $origin = $this->airports[$flight['origin']];
+                $origin = $this->airports[$flight['origin']] ?? $this->airports['YVR'];
                 $dest = $this->airports[$flight['destination']];
                 
                 // Calculate progress based on SCHEDULE
-                $scheduledDeparture = strtotime($flight['schedule_std']);
-                $scheduledArrival = strtotime($flight['schedule_sta']);
+                $scheduledDeparture = strtotime($flight['schedule_std'] . ' UTC');
+                $scheduledArrival = strtotime($flight['schedule_sta'] . ' UTC');
                 $scheduledDuration = max(1, $scheduledArrival - $scheduledDeparture);
                 
                 $currentTime = time();
@@ -211,7 +284,7 @@ class XpressFeederWebSocket implements MessageComponentInterface {
                 $flight['lat'] = $this->interpolateLat($origin['lat'], $dest['lat'], $progress);
                 $flight['lon'] = $this->interpolateLon($origin['lon'], $dest['lon'], $progress, $origin['lat'], $dest['lat']);
                 
-                // REALISTIC PIPER PA-31-350 ALTITUDE PROFILE (CAST TO INT)
+                // REALISTIC PIPER PA-31-350 ALTITUDE PROFILE
                 if ($progress < 0.15) {
                     // Climb phase (1200 fpm Piper climb rate)
                     $flight['altitude'] = (int)round(min(12000, 1000 + ($progress / 0.15) * 11000));
@@ -219,34 +292,34 @@ class XpressFeederWebSocket implements MessageComponentInterface {
                     // Descent phase (800 fpm descent)
                     $flight['altitude'] = (int)round(12000 - (($progress - 0.85) / 0.15) * 11000);
                 } else {
-                    // Cruise at 10,000-12,000 ft (optimal for PA-31-350)
+                    // Cruise at 10,000-12,000 ft
                     $flight['altitude'] = (int)(11000 + rand(-500, 500));
                 }
                 
                 // PIPER CRUISE SPEED CALCULATION
-                // True airspeed increases ~2% per 1,000 ft altitude
                 $currentAltitude = $flight['altitude'];
                 $altitudeFactor = 1 + (($currentAltitude / 1000) * 0.02);
                 $trueAirspeed = $specs['cruise_speed'] * $altitudeFactor;
                 
-                // Groundspeed with wind component (CAST TO INT)
+                // Groundspeed with wind component
                 $windComponent = rand(-10, 10);
                 $flight['groundspeed'] = (int)($trueAirspeed + $windComponent);
                 
-                // Heading toward destination (CAST TO INT)
-                $flight['heading'] = (int)$this->calculateHeading($flight['lat'], $flight['lon'], $dest['lat'], $dest['lon']);
-                $flight['last_update'] = date('Y-m-d H:i:s');
+                // Heading toward destination
+                $flight['heading'] = $this->calculateHeading($flight['lat'], $flight['lon'], $dest['lat'], $dest['lon']);
+                $flight['last_update'] = $this->getUTCTime();
                 
                 // Update database
-                $this->updateFlightInDatabase($flight);
-                
-                // Broadcast to all clients
-                $this->broadcast(json_encode([
-                    'type' => 'flight_position',
-                    'data' => $flight
-                ]));
-                
-                echo "[" . date('H:i:s') . "] Moved: {$callsign} | Alt: {$flight['altitude']}ft | GS: {$flight['groundspeed']}kt | HDG: {$flight['heading']}°\n";
+                if ($this->updateFlightInDatabase($flight)) {
+                    // BROADCAST FIX: Pass array, not pre-encoded JSON
+                    $this->broadcast([
+                        'type' => 'flight_position',
+                        'data' => $flight,
+                        'timestamp' => microtime(true)
+                    ]);
+                    
+                    echo "[" . $this->getUTCTime() . "] Moved: {$callsign} | Alt: {$flight['altitude']}ft | GS: {$flight['groundspeed']}kt | HDG: {$flight['heading']}°\n";
+                }
                 
                 // Check if flight should have arrived
                 if ($progress >= 0.99) {
@@ -256,110 +329,241 @@ class XpressFeederWebSocket implements MessageComponentInterface {
                     $flight['altitude'] = 0;
                     $flight['groundspeed'] = 0;
                     $flight['heading'] = 0;
-                    $this->updateFlightInDatabase($flight);
-                    echo "[" . date('H:i:s') . "] {$callsign} has arrived at {$flight['destination']}\n";
+                    
+                    if ($this->updateFlightInDatabase($flight)) {
+                        $this->broadcast([
+                            'type' => 'flight_status',
+                            'callsign' => $callsign,
+                            'status' => 'arrived',
+                            'timestamp' => microtime(true)
+                        ]);
+                        echo "[" . $this->getUTCTime() . "] {$callsign} has arrived at {$flight['destination']}\n";
+                    }
                 }
             }
         }
+        // CRITICAL FIX: Unset reference to prevent bugs
+        unset($flight);
     }
 
     public function handleFlightUpdate($flightData) {
-        $callsign = $flightData['callsign'] ?? 'unknown';
-        $this->flightCache[$callsign] = $flightData;
+        // AUTHENTICATION CHECK (SECURITY FIX)
+        if (!$this->isClientAuthorized($flightData['auth_token'] ?? null)) {
+            echo "[" . $this->getUTCTime() . "] Unauthorized flight update attempt\n";
+            return false;
+        }
         
-        $message = [
+        $validatedData = $this->validateFlightData($flightData);
+        if (!$validatedData) {
+            echo "[" . $this->getUTCTime() . "] Invalid flight data received\n";
+            return false;
+        }
+        
+        $callsign = $validatedData['callsign'];
+        $this->flightCache[$callsign] = $validatedData;
+        
+        // Update database
+        $this->updateFlightInDatabase($validatedData);
+        
+        // Broadcast to all clients
+        $this->broadcast([
             'type' => 'flight_position',
-            'data' => $flightData,
-            'timestamp' => microtime(true)
-        ];
+            'data' => $validatedData,
+            'timestamp' => microtime(true),
+            'source' => 'push_update'
+        ]);
         
-        $this->broadcast($message);
-        echo "[" . date('Y-m-d H:i:s') . "] REAL-TIME update: {$callsign}\n";
+        echo "[" . $this->getUTCTime() . "] REAL-TIME update: {$callsign}\n";
+        return true;
+    }
+    
+    private function isClientAuthorized($token): bool {
+        $apiKey = getenv('PUSH_API_KEY');
+        if (!$apiKey) {
+            // If no API key is set, warn but allow (development mode)
+            error_log("WARNING: PUSH_API_KEY not set. Running in insecure mode.");
+            return true;
+        }
+        
+        return $token === $apiKey || 
+               $token === hash('sha256', $apiKey . date('Y-m-d-H'));
     }
 
     public function onOpen(ConnectionInterface $conn) {
         $this->clients->attach($conn);
-        $conn->resourceId = uniqid();
+        $conn->resourceId = uniqid('client_', true);
+        $conn->authenticated = false; // Track auth status
 
-        echo "[" . date('Y-m-d H:i:s') . "] New client: {$conn->resourceId}\n";
+        echo "[" . $this->getUTCTime() . "] New client: {$conn->resourceId}\n";
 
         // Send all active flights
         foreach ($this->flightCache as $flight) {
-            $conn->send(json_encode([
+            $this->sendToClient($conn, [
                 'type' => 'flight_position',
                 'data' => $flight
-            ]));
+            ]);
         }
 
-        $conn->send(json_encode([
+        $this->sendToClient($conn, [
             'type' => 'connection_established',
             'resource_id' => $conn->resourceId,
             'server' => 'Xpress Feeder REAL LIVE WebSocket',
-            'timestamp' => date('Y-m-d H:i:s'),
+            'timestamp' => $this->getUTCTime(),
             'message' => 'REAL-TIME FLIGHT UPDATES ACTIVE',
-            'active_flights' => count($this->flightCache)
-        ]));
+            'active_flights' => count($this->flightCache),
+            'requires_auth' => !empty(getenv('PUSH_API_KEY'))
+        ]);
     }
 
     public function onMessage(ConnectionInterface $from, $msg) {
         $data = json_decode($msg, true);
-        if (!$data) return;
+        if (!$data) {
+            $this->sendToClient($from, [
+                'type' => 'error',
+                'message' => 'Invalid JSON'
+            ]);
+            return;
+        }
 
-        $type = $data['type'] ?? '';
+        $type = $data['type'] ?? 'unknown';
 
         switch ($type) {
             case 'auth':
-                $from->send(json_encode([
-                    'type' => 'auth_success', 
-                    'timestamp' => microtime(true)
-                ]));
+                $token = $data['token'] ?? '';
+                if ($this->isClientAuthorized($token)) {
+                    $from->authenticated = true;
+                    $this->clientAuthTokens[$from->resourceId] = $token;
+                    
+                    $this->sendToClient($from, [
+                        'type' => 'auth_success',
+                        'timestamp' => microtime(true),
+                        'expires' => time() + 3600
+                    ]);
+                } else {
+                    $this->sendToClient($from, [
+                        'type' => 'auth_failed',
+                        'message' => 'Invalid authentication token'
+                    ]);
+                }
                 break;
 
             case 'subscribe_flights':
                 foreach ($this->flightCache as $flight) {
-                    $from->send(json_encode([
+                    $this->sendToClient($from, [
                         'type' => 'flight_position',
                         'data' => $flight
-                    ]));
+                    ]);
                 }
                 break;
 
             case 'flight_push':
+                if (!$from->authenticated) {
+                    $this->sendToClient($from, [
+                        'type' => 'error',
+                        'message' => 'Authentication required for flight updates'
+                    ]);
+                    break;
+                }
+                
                 if (isset($data['data'])) {
+                    $data['data']['auth_token'] = $this->clientAuthTokens[$from->resourceId] ?? '';
                     $this->handleFlightUpdate($data['data']);
                 }
                 break;
 
             case 'ping':
-                $from->send(json_encode([
-                    'type' => 'pong', 
+                $this->sendToClient($from, [
+                    'type' => 'pong',
                     'timestamp' => microtime(true),
-                    'server_time' => date('H:i:s')
-                ]));
+                    'server_time' => $this->getUTCTime()
+                ]);
                 break;
+                
+            case 'request_flights':
+                $this->sendToClient($from, [
+                    'type' => 'flight_list',
+                    'data' => array_values($this->flightCache),
+                    'timestamp' => microtime(true)
+                ]);
+                break;
+
+            default:
+                $this->sendToClient($from, [
+                    'type' => 'error',
+                    'message' => 'Unknown command: ' . $type
+                ]);
         }
     }
 
+    // FIXED BROADCAST: No double JSON encoding
     private function broadcast($data) {
-        $message = json_encode($data);
+        $message = is_string($data) ? $data : json_encode($data, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        
         foreach ($this->clients as $client) {
+            $this->sendToClient($client, $message, false); // false = already encoded
+        }
+    }
+    
+    private function sendToClient(ConnectionInterface $client, $data, $encode = true) {
+        try {
+            $message = $encode ? json_encode($data, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) : $data;
             $client->send($message);
+        } catch (\Exception $e) {
+            // Client disconnected, remove them
+            $this->clients->detach($client);
+            unset($this->clientAuthTokens[$client->resourceId]);
+            echo "[" . $this->getUTCTime() . "] Removed dead client: {$client->resourceId}\n";
         }
     }
 
     public function onClose(ConnectionInterface $conn) {
         $this->clients->detach($conn);
-        echo "[" . date('Y-m-d H:i:s') . "] Client disconnected: {$conn->resourceId}\n";
+        unset($this->clientAuthTokens[$conn->resourceId]);
+        echo "[" . $this->getUTCTime() . "] Client disconnected: {$conn->resourceId}\n";
     }
 
     public function onError(ConnectionInterface $conn, \Exception $e) {
-        echo "[" . date('Y-m-d H:i:s') . "] Error: {$e->getMessage()}\n";
+        echo "[" . $this->getUTCTime() . "] Error ({$conn->resourceId}): {$e->getMessage()}\n";
         $conn->close();
+    }
+    
+    // FIXED HTTP PARSING FUNCTION
+    private function parseHttpRequest(string $raw): array {
+        $parts = preg_split("/\r\n\r\n/", $raw, 2);
+        if (count($parts) < 2) {
+            return ['headers' => [], 'body' => '', 'method' => '', 'path' => ''];
+        }
+        
+        $headerLines = explode("\r\n", $parts[0]);
+        $startLine = array_shift($headerLines);
+        
+        // Parse method and path
+        $method = '';
+        $path = '';
+        if (preg_match('/^(GET|POST|PUT|DELETE)\s+(\S+)/', $startLine, $matches)) {
+            $method = $matches[1];
+            $path = $matches[2];
+        }
+        
+        $headers = [];
+        foreach ($headerLines as $line) {
+            if (strpos($line, ':') !== false) {
+                list($key, $value) = explode(':', $line, 2);
+                $headers[strtolower(trim($key))] = trim($value);
+            }
+        }
+        
+        return [
+            'method' => $method,
+            'path' => $path,
+            'headers' => $headers,
+            'body' => $parts[1] ?? ''
+        ];
     }
 }
 
 try {
-    // PORT CONFIGURATION WITH VALIDATION - FIXED
+    // PORT CONFIGURATION WITH VALIDATION
     $port = (int)(getenv('PORT') ?: 10000);
     if ($port < 1 || $port > 65535) {
         $port = 10000;
@@ -372,7 +576,8 @@ try {
     echo "Host: {$host}\n";
     echo "Port: {$port}\n";
     echo "Database: PostgreSQL/NeonDB\n";
-    echo "Started: " . date('Y-m-d H:i:s') . "\n";
+    echo "Started: " . (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))->format('Y-m-d H:i:s') . " UTC\n";
+    echo "Security: " . (getenv('PUSH_API_KEY') ? 'ENABLED' : 'DISABLED (set PUSH_API_KEY)') . "\n";
     echo "Mode: PIPER PA-31-350 REAL FLIGHT PHYSICS\n";
     echo "========================================\n\n";
 
@@ -392,45 +597,94 @@ try {
         $websocket->updateFlightPositions();
     });
 
-    // HTTP POST HANDLER WITH HEALTH CHECK - FIXED
+    // IMPROVED HTTP POST HANDLER WITH PROPER PARSING (FIXED)
     $server->socket->on('connection', function($socket) use ($websocket) {
-        $socket->on('data', function($data) use ($websocket, $socket) {
-            // HEALTH CHECK for Render - FIXED
-            if (strpos($data, 'GET /health') !== false) {
-                $response = "HTTP/1.1 200 OK\r\n";
-                $response .= "Content-Type: application/json\r\n\r\n";
-                $response .= json_encode([
-                    'status' => 'healthy',
-                    'server' => 'Xpress Feeder WebSocket',
-                    'timestamp' => date('Y-m-d H:i:s'),
-                    'active_clients' => count($websocket->clients),
-                    'active_flights' => count($websocket->flightCache)
-                ]);
-                $socket->write($response);
-                $socket->end();
-                return;
-            }
+        $buffer = '';
+        
+        $socket->on('data', function($data) use ($websocket, $socket, &$buffer) {
+            $buffer .= $data;
             
-            if (strpos($data, 'POST /push_flight') !== false) {
-                $lines = explode("\r\n", $data);
-                $body = end($lines);
-                $flightData = json_decode($body, true);
+            // Check if we have a complete HTTP request
+            if (strpos($buffer, "\r\n\r\n") !== false) {
+                $request = $websocket->parseHttpRequest($buffer);
                 
-                if ($flightData) {
-                    $websocket->handleFlightUpdate($flightData);
-                    
-                    $response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n" . 
-                                json_encode(['status' => 'ok', 'received' => microtime(true)]);
+                // HEALTH CHECK endpoint
+                if ($request['method'] === 'GET' && strpos($request['path'], '/health') === 0) {
+                    $response = "HTTP/1.1 200 OK\r\n";
+                    $response .= "Content-Type: application/json\r\n";
+                    $response .= "Connection: close\r\n\r\n";
+                    $response .= json_encode([
+                        'status' => 'healthy',
+                        'server' => 'Xpress Feeder WebSocket',
+                        'timestamp' => (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))->format('c'),
+                        'active_clients' => count($websocket->clients),
+                        'active_flights' => count($websocket->flightCache),
+                        'version' => '2.0.0-patched'
+                    ]);
                     $socket->write($response);
                     $socket->end();
+                    $buffer = '';
+                    return;
                 }
+                
+                // FLIGHT PUSH endpoint with AUTHENTICATION (SECURITY FIX)
+                if ($request['method'] === 'POST' && strpos($request['path'], '/push_flight') === 0) {
+                    $apiKey = getenv('PUSH_API_KEY');
+                    $authHeader = $request['headers']['x-api-key'] ?? '';
+                    
+                    if ($apiKey && $authHeader !== $apiKey) {
+                        $response = "HTTP/1.1 401 Unauthorized\r\n";
+                        $response .= "Content-Type: application/json\r\n\r\n";
+                        $response .= json_encode(['error' => 'Invalid API key']);
+                        $socket->write($response);
+                        $socket->end();
+                        $buffer = '';
+                        return;
+                    }
+                    
+                    $flightData = json_decode($request['body'], true);
+                    
+                    if ($flightData && $websocket->handleFlightUpdate($flightData)) {
+                        $response = "HTTP/1.1 200 OK\r\n";
+                        $response .= "Content-Type: application/json\r\n\r\n";
+                        $response .= json_encode([
+                            'status' => 'ok',
+                            'received' => microtime(true),
+                            'callsign' => $flightData['callsign'] ?? 'unknown'
+                        ]);
+                    } else {
+                        $response = "HTTP/1.1 400 Bad Request\r\n";
+                        $response .= "Content-Type: application/json\r\n\r\n";
+                        $response .= json_encode([
+                            'error' => 'Invalid flight data'
+                        ]);
+                    }
+                    
+                    $socket->write($response);
+                    $socket->end();
+                    $buffer = '';
+                    return;
+                }
+                
+                // Unknown endpoint
+                $response = "HTTP/1.1 404 Not Found\r\n";
+                $response .= "Content-Type: application/json\r\n\r\n";
+                $response .= json_encode(['error' => 'Endpoint not found']);
+                $socket->write($response);
+                $socket->end();
+                $buffer = '';
             }
+        });
+        
+        $socket->on('close', function() use (&$buffer) {
+            $buffer = '';
         });
     });
 
     $server->run();
 
 } catch (Exception $e) {
-    echo "\n[ERROR] " . $e->getMessage() . "\n";
+    echo "\n[" . (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))->format('Y-m-d H:i:s') . "] [FATAL ERROR] " . $e->getMessage() . "\n";
+    error_log("WebSocket Server Fatal Error: " . $e->getMessage() . "\n" . $e->getTraceAsString());
     exit(1);
 }
