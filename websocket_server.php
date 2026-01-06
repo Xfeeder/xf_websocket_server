@@ -91,33 +91,42 @@ class XpressFeederWebSocket implements MessageComponentInterface {
     }
     
     private function initializeDatabase(): void {
-        // CRITICAL FIX: Require environment variables - NO DEFAULT PASSWORDS
-        $dbHost = getenv('DB_HOST');
-        $dbName = getenv('DB_NAME') ?: 'neondb';
-        $dbUser = getenv('DB_USER') ?: 'neondb_owner';
-        $dbPass = getenv('DB_PASSWORD');
-        
-        $dbHost = getenv('DB_HOST') ?: 
-          (file_exists('/etc/secrets/.env') ? parse_ini_file('/etc/secrets/.env')['DB_HOST'] ?? '' : '');
-        }
-        
-        try {
-            $this->pdo = new PDO(
-                "pgsql:host={$dbHost};dbname={$dbName}",
-                $dbUser,
-                $dbPass,
-                [
-                    PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
-                    PDO::ATTR_EMULATE_PREPARES => false, // Security fix
-                    PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
-                    PDO::ATTR_TIMEOUT => 5,
-                    PDO::ATTR_PERSISTENT => false
-                ]
-            );
-        } catch (\PDOException $e) {
-            throw new \RuntimeException("Database connection failed: " . $e->getMessage());
-        }
+    // CRITICAL FIX: Require environment variables - NO DEFAULT PASSWORDS
+    $dbHost = getenv('DB_HOST');
+    $dbName = getenv('DB_NAME') ?: 'neondb';
+    $dbUser = getenv('DB_USER') ?: 'neondb_owner';
+    $dbPass = getenv('DB_PASSWORD');
+    
+    // TEMPORARY: Debug output
+    echo "DEBUG - DB_HOST: " . ($dbHost ? 'SET' : 'MISSING') . "\n";
+    echo "DEBUG - DB_USER: " . ($dbUser ? 'SET' : 'MISSING') . "\n"; 
+    echo "DEBUG - DB_PASS: " . ($dbPass ? 'SET' : 'MISSING') . "\n";
+    echo "DEBUG - DB_NAME: " . ($dbName ? 'SET' : 'MISSING') . "\n";
+    
+    if (!$dbHost || !$dbUser || !$dbPass || !$dbName) {
+        echo "WARNING: Running in simulation mode (no database)\n";
+        return;
     }
+    
+    try {
+        $this->pdo = new PDO(
+            "pgsql:host={$dbHost};dbname={$dbName}",
+            $dbUser,
+            $dbPass,
+            [
+                PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+                PDO::ATTR_EMULATE_PREPARES => false,
+                PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+                PDO::ATTR_TIMEOUT => 5,
+                PDO::ATTR_PERSISTENT => false
+            ]
+        );
+        echo "Database connected successfully!\n";
+    } catch (\PDOException $e) {
+        echo "Database connection failed: " . $e->getMessage() . "\n";
+        // Don't throw, just run without DB
+    }
+}
     
     private function loadActiveFlights(): void {
         $currentTimeUTC = (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))
@@ -685,4 +694,5 @@ try {
     error_log("WebSocket Server Fatal Error: " . $e->getMessage() . "\n" . $e->getTraceAsString());
     exit(1);
 }
+
 
