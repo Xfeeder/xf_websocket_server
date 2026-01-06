@@ -97,11 +97,8 @@ class XpressFeederWebSocket implements MessageComponentInterface {
         $dbUser = getenv('DB_USER') ?: 'neondb_owner';
         $dbPass = getenv('DB_PASSWORD');
         
-        if (!$dbHost || !$dbUser || !$dbPass || !$dbName) {
-            throw new \RuntimeException(
-                'Database credentials are not set in environment variables. ' .
-                'Required: DB_HOST, DB_NAME, DB_USER, DB_PASSWORD'
-            );
+        $dbHost = getenv('DB_HOST') ?: 
+          (file_exists('/etc/secrets/.env') ? parse_ini_file('/etc/secrets/.env')['DB_HOST'] ?? '' : '');
         }
         
         try {
@@ -688,3 +685,4 @@ try {
     error_log("WebSocket Server Fatal Error: " . $e->getMessage() . "\n" . $e->getTraceAsString());
     exit(1);
 }
+
