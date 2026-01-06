@@ -95,14 +95,40 @@ class XpressFeederWebSocket implements MessageComponentInterface {
     $envPath = '/etc/secrets/.env';
     if (file_exists($envPath)) {
         echo "DEBUG: .env file FOUND at $envPath\n";
-        echo "DEBUG: Contents: " . file_get_contents($envPath) . "\n";
+        
+        // MANUALLY LOAD .env file since getenv() isn't working
+        $envContents = file_get_contents($envPath);
+        $lines = explode("\n", $envContents);
+        $envVars = [];
+        
+        foreach ($lines as $line) {
+            $line = trim($line);
+            if (!empty($line) && strpos($line, '=') !== false && $line[0] !== '#') {
+                list($key, $value) = explode('=', $line, 2);
+                $key = trim($key);
+                $value = trim($value);
+                $envVars[$key] = $value;
+                // Set in environment
+                putenv("$key=$value");
+                $_ENV[$key] = $value;
+            }
+        }
+        
+        echo "DEBUG: Loaded variables: " . implode(', ', array_keys($envVars)) . "\n";
     } else {
         echo "DEBUG: .env file NOT FOUND at $envPath\n";
-        echo "DEBUG: Current dir: " . getcwd() . "\n";
-        echo "DEBUG: Files in /etc/secrets/: " . implode(', ', scandir('/etc/secrets')) . "\n";
     }
     
-    // Rest of code...
+    // Get variables (try both uppercase and lowercase)
+    $dbHost = getenv('DB_HOST') ?: (getenv('db_host') ?: '');
+    $dbName = getenv('DB_NAME') ?: (getenv('db_name') ?: 'neondb');
+    $dbUser = getenv('DB_USER') ?: (getenv('db_user') ?: 'neondb_owner');
+    $dbPass = getenv('DB_PASSWORD') ?: (getenv('db_password') ?: '');
+    
+    echo "DEBUG - DB_HOST: " . ($dbHost ? "SET ($dbHost)" : "MISSING") . "\n";
+    echo "DEBUG - DB_USER: " . ($dbUser ? "SET ($dbUser)" : "MISSING") . "\n";
+    echo "DEBUG - DB_PASS: " . ($dbPass ? "SET (***)" : "MISSING") . "\n";
+    echo "DEBUG - DB_NAME: " . ($dbName ? "SET ($dbName)" : "MISSING") . "\n";
     
     if (!$dbHost || !$dbUser || !$dbPass || !$dbName) {
         echo "WARNING: Running in simulation mode (no database)\n";
@@ -695,6 +721,7 @@ try {
     error_log("WebSocket Server Fatal Error: " . $e->getMessage() . "\n" . $e->getTraceAsString());
     exit(1);
 }
+
 
 
 
