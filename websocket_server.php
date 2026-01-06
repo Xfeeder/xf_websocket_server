@@ -90,18 +90,19 @@ class XpressFeederWebSocket implements MessageComponentInterface {
             ->format('Y-m-d H:i:s');
     }
     
-    private function initializeDatabase(): void {
-    // CRITICAL FIX: Require environment variables - NO DEFAULT PASSWORDS
-    $dbHost = getenv('DB_HOST');
-    $dbName = getenv('DB_NAME') ?: 'neondb';
-    $dbUser = getenv('DB_USER') ?: 'neondb_owner';
-    $dbPass = getenv('DB_PASSWORD');
+   private function initializeDatabase(): void {
+    // DEBUG: Check if .env file exists
+    $envPath = '/etc/secrets/.env';
+    if (file_exists($envPath)) {
+        echo "DEBUG: .env file FOUND at $envPath\n";
+        echo "DEBUG: Contents: " . file_get_contents($envPath) . "\n";
+    } else {
+        echo "DEBUG: .env file NOT FOUND at $envPath\n";
+        echo "DEBUG: Current dir: " . getcwd() . "\n";
+        echo "DEBUG: Files in /etc/secrets/: " . implode(', ', scandir('/etc/secrets')) . "\n";
+    }
     
-    // TEMPORARY: Debug output
-    echo "DEBUG - DB_HOST: " . ($dbHost ? 'SET' : 'MISSING') . "\n";
-    echo "DEBUG - DB_USER: " . ($dbUser ? 'SET' : 'MISSING') . "\n"; 
-    echo "DEBUG - DB_PASS: " . ($dbPass ? 'SET' : 'MISSING') . "\n";
-    echo "DEBUG - DB_NAME: " . ($dbName ? 'SET' : 'MISSING') . "\n";
+    // Rest of code...
     
     if (!$dbHost || !$dbUser || !$dbPass || !$dbName) {
         echo "WARNING: Running in simulation mode (no database)\n";
@@ -694,5 +695,6 @@ try {
     error_log("WebSocket Server Fatal Error: " . $e->getMessage() . "\n" . $e->getTraceAsString());
     exit(1);
 }
+
 
 
