@@ -10,6 +10,9 @@ use Ratchet\Http\HttpServer;
 use Ratchet\WebSocket\WsServer;
 use Ratchet\MessageComponentInterface;
 use Ratchet\ConnectionInterface;
+use Ratchet\Http\Router;
+use Symfony\Component\Routing\Route;
+use Symfony\Component\Routing\RouteCollection;
 
 require __DIR__ . '/vendor/autoload.php';
 
@@ -90,70 +93,70 @@ class XpressFeederWebSocket implements MessageComponentInterface {
             ->format('Y-m-d H:i:s');
     }
     
-   private function initializeDatabase(): void {
-    // DEBUG: Check if .env file exists
-    $envPath = '/etc/secrets/.env';
-    if (file_exists($envPath)) {
-        echo "DEBUG: .env file FOUND at $envPath\n";
-        
-        // MANUALLY LOAD .env file since getenv() isn't working
-        $envContents = file_get_contents($envPath);
-        $lines = explode("\n", $envContents);
-        $envVars = [];
-        
-        foreach ($lines as $line) {
-            $line = trim($line);
-            if (!empty($line) && strpos($line, '=') !== false && $line[0] !== '#') {
-                list($key, $value) = explode('=', $line, 2);
-                $key = trim($key);
-                $value = trim($value);
-                $envVars[$key] = $value;
-                // Set in environment
-                putenv("$key=$value");
-                $_ENV[$key] = $value;
+    private function initializeDatabase(): void {
+        // DEBUG: Check if .env file exists
+        $envPath = '/etc/secrets/.env';
+        if (file_exists($envPath)) {
+            echo "DEBUG: .env file FOUND at $envPath\n";
+            
+            // MANUALLY LOAD .env file since getenv() isn't working
+            $envContents = file_get_contents($envPath);
+            $lines = explode("\n", $envContents);
+            $envVars = [];
+            
+            foreach ($lines as $line) {
+                $line = trim($line);
+                if (!empty($line) && strpos($line, '=') !== false && $line[0] !== '#') {
+                    list($key, $value) = explode('=', $line, 2);
+                    $key = trim($key);
+                    $value = trim($value);
+                    $envVars[$key] = $value;
+                    // Set in environment
+                    putenv("$key=$value");
+                    $_ENV[$key] = $value;
+                }
             }
+            
+            echo "DEBUG: Loaded variables: " . implode(', ', array_keys($envVars)) . "\n";
+        } else {
+            echo "DEBUG: .env file NOT FOUND at $envPath\n";
         }
         
-        echo "DEBUG: Loaded variables: " . implode(', ', array_keys($envVars)) . "\n";
-    } else {
-        echo "DEBUG: .env file NOT FOUND at $envPath\n";
+        // Get variables (try both uppercase and lowercase)
+        $dbHost = getenv('DB_HOST') ?: (getenv('db_host') ?: '');
+        $dbName = getenv('DB_NAME') ?: (getenv('db_name') ?: 'neondb');
+        $dbUser = getenv('DB_USER') ?: (getenv('db_user') ?: 'neondb_owner');
+        $dbPass = getenv('DB_PASSWORD') ?: (getenv('db_password') ?: '');
+        
+        echo "DEBUG - DB_HOST: " . ($dbHost ? "SET ($dbHost)" : "MISSING") . "\n";
+        echo "DEBUG - DB_USER: " . ($dbUser ? "SET ($dbUser)" : "MISSING") . "\n";
+        echo "DEBUG - DB_PASS: " . ($dbPass ? "SET (***)" : "MISSING") . "\n";
+        echo "DEBUG - DB_NAME: " . ($dbName ? "SET ($dbName)" : "MISSING") . "\n";
+        
+        if (!$dbHost || !$dbUser || !$dbPass || !$dbName) {
+            echo "WARNING: Running in simulation mode (no database)\n";
+            return;
+        }
+        
+        try {
+            $this->pdo = new PDO(
+                "pgsql:host={$dbHost};dbname={$dbName}",
+                $dbUser,
+                $dbPass,
+                [
+                    PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+                    PDO::ATTR_EMULATE_PREPARES => false,
+                    PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+                    PDO::ATTR_TIMEOUT => 5,
+                    PDO::ATTR_PERSISTENT => false
+                ]
+            );
+            echo "Database connected successfully!\n";
+        } catch (\PDOException $e) {
+            echo "Database connection failed: " . $e->getMessage() . "\n";
+            // Don't throw, just run without DB
+        }
     }
-    
-    // Get variables (try both uppercase and lowercase)
-    $dbHost = getenv('DB_HOST') ?: (getenv('db_host') ?: '');
-    $dbName = getenv('DB_NAME') ?: (getenv('db_name') ?: 'neondb');
-    $dbUser = getenv('DB_USER') ?: (getenv('db_user') ?: 'neondb_owner');
-    $dbPass = getenv('DB_PASSWORD') ?: (getenv('db_password') ?: '');
-    
-    echo "DEBUG - DB_HOST: " . ($dbHost ? "SET ($dbHost)" : "MISSING") . "\n";
-    echo "DEBUG - DB_USER: " . ($dbUser ? "SET ($dbUser)" : "MISSING") . "\n";
-    echo "DEBUG - DB_PASS: " . ($dbPass ? "SET (***)" : "MISSING") . "\n";
-    echo "DEBUG - DB_NAME: " . ($dbName ? "SET ($dbName)" : "MISSING") . "\n";
-    
-    if (!$dbHost || !$dbUser || !$dbPass || !$dbName) {
-        echo "WARNING: Running in simulation mode (no database)\n";
-        return;
-    }
-    
-    try {
-        $this->pdo = new PDO(
-            "pgsql:host={$dbHost};dbname={$dbName}",
-            $dbUser,
-            $dbPass,
-            [
-                PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
-                PDO::ATTR_EMULATE_PREPARES => false,
-                PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
-                PDO::ATTR_TIMEOUT => 5,
-                PDO::ATTR_PERSISTENT => false
-            ]
-        );
-        echo "Database connected successfully!\n";
-    } catch (\PDOException $e) {
-        echo "Database connection failed: " . $e->getMessage() . "\n";
-        // Don't throw, just run without DB
-    }
-}
     
     private function loadActiveFlights(): void {
         $currentTimeUTC = (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))
@@ -559,39 +562,118 @@ class XpressFeederWebSocket implements MessageComponentInterface {
         echo "[" . $this->getUTCTime() . "] Error ({$conn->resourceId}): {$e->getMessage()}\n";
         $conn->close();
     }
+}
+
+// Create a custom HTTP server that handles both WebSocket and HTTP requests
+class CustomHttpServer extends HttpServer {
+    private $websocketHandler;
     
-    // FIXED HTTP PARSING FUNCTION
-   public function parseRawHttpRequest(string $raw): array {
-        $parts = preg_split("/\r\n\r\n/", $raw, 2);
-        if (count($parts) < 2) {
-            return ['headers' => [], 'body' => '', 'method' => '', 'path' => ''];
-        }
-        
-        $headerLines = explode("\r\n", $parts[0]);
-        $startLine = array_shift($headerLines);
-        
-        // Parse method and path
-        $method = '';
-        $path = '';
-        if (preg_match('/^(GET|POST|PUT|DELETE)\s+(\S+)/', $startLine, $matches)) {
-            $method = $matches[1];
-            $path = $matches[2];
-        }
-        
-        $headers = [];
-        foreach ($headerLines as $line) {
-            if (strpos($line, ':') !== false) {
-                list($key, $value) = explode(':', $line, 2);
-                $headers[strtolower(trim($key))] = trim($value);
+    public function __construct(WsServer $ws, XpressFeederWebSocket $websocketHandler) {
+        parent::__construct($ws);
+        $this->websocketHandler = $websocketHandler;
+    }
+    
+    public function onOpen(\Ratchet\ConnectionInterface $conn, \Psr\Http\Message\RequestInterface $request = null) {
+        // Check if this is a WebSocket upgrade request
+        $isWebSocket = false;
+        if ($request && $request->hasHeader('Upgrade')) {
+            $upgradeHeaders = $request->getHeader('Upgrade');
+            foreach ($upgradeHeaders as $upgradeHeader) {
+                if (strtolower($upgradeHeader) === 'websocket') {
+                    $isWebSocket = true;
+                    break;
+                }
             }
         }
         
-        return [
-            'method' => $method,
-            'path' => $path,
-            'headers' => $headers,
-            'body' => $parts[1] ?? ''
-        ];
+        if ($isWebSocket) {
+            // Handle as WebSocket
+            parent::onOpen($conn, $request);
+        } else {
+            // Handle as regular HTTP request
+            $this->handleHttpRequest($conn, $request);
+        }
+    }
+    
+    private function handleHttpRequest(\Ratchet\ConnectionInterface $conn, \Psr\Http\Message\RequestInterface $request) {
+        $path = $request->getUri()->getPath();
+        $method = $request->getMethod();
+        
+        // Handle health check
+        if ($method === 'GET' && strpos($path, '/health') === 0) {
+            $response = new \GuzzleHttp\Psr7\Response(
+                200,
+                ['Content-Type' => 'application/json'],
+                json_encode([
+                    'status' => 'healthy',
+                    'server' => 'Xpress Feeder WebSocket',
+                    'timestamp' => (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))->format('c'),
+                    'active_clients' => count($this->websocketHandler->clients),
+                    'active_flights' => count($this->websocketHandler->flightCache),
+                    'version' => '2.0.0-patched'
+                ])
+            );
+            $conn->send(\GuzzleHttp\Psr7\Message::toString($response));
+            $conn->close();
+            return;
+        }
+        
+        // Handle flight push
+        if ($method === 'POST' && strpos($path, '/push_flight') === 0) {
+            $body = (string)$request->getBody();
+            $flightData = json_decode($body, true);
+            
+            // Check authentication
+            $apiKey = getenv('PUSH_API_KEY');
+            $authHeader = $request->getHeaderLine('X-API-Key');
+            
+            if ($apiKey && $authHeader !== $apiKey) {
+                $response = new \GuzzleHttp\Psr7\Response(
+                    401,
+                    ['Content-Type' => 'application/json'],
+                    json_encode(['error' => 'Invalid API key'])
+                );
+                $conn->send(\GuzzleHttp\Psr7\Message::toString($response));
+                $conn->close();
+                return;
+            }
+            
+            // Add auth token for validation
+            if ($flightData) {
+                $flightData['auth_token'] = $authHeader ?: $apiKey;
+            }
+            
+            if ($flightData && $this->websocketHandler->handleFlightUpdate($flightData)) {
+                $response = new \GuzzleHttp\Psr7\Response(
+                    200,
+                    ['Content-Type' => 'application/json'],
+                    json_encode([
+                        'status' => 'ok',
+                        'received' => microtime(true),
+                        'callsign' => $flightData['callsign'] ?? 'unknown'
+                    ])
+                );
+            } else {
+                $response = new \GuzzleHttp\Psr7\Response(
+                    400,
+                    ['Content-Type' => 'application/json'],
+                    json_encode(['error' => 'Invalid flight data'])
+                );
+            }
+            
+            $conn->send(\GuzzleHttp\Psr7\Message::toString($response));
+            $conn->close();
+            return;
+        }
+        
+        // Unknown endpoint
+        $response = new \GuzzleHttp\Psr7\Response(
+            404,
+            ['Content-Type' => 'application/json'],
+            json_encode(['error' => 'Endpoint not found'])
+        );
+        $conn->send(\GuzzleHttp\Psr7\Message::toString($response));
+        $conn->close();
     }
 }
 
@@ -616,10 +698,11 @@ try {
 
     $websocket = new XpressFeederWebSocket();
 
-    // Create HTTP server
+    // Create HTTP server with custom handler
     $server = IoServer::factory(
-        new HttpServer(
-            new WsServer($websocket)
+        new CustomHttpServer(
+            new WsServer($websocket),
+            $websocket
         ),
         $port,
         $host
@@ -630,90 +713,6 @@ try {
         $websocket->updateFlightPositions();
     });
 
-    // IMPROVED HTTP POST HANDLER WITH PROPER PARSING (FIXED)
-    $server->socket->on('connection', function($socket) use ($websocket) {
-        $buffer = '';
-        
-        $socket->on('data', function($data) use ($websocket, $socket, &$buffer) {
-            $buffer .= $data;
-            
-            // Check if we have a complete HTTP request
-            if (strpos($buffer, "\r\n\r\n") !== false) {
-                $request = $websocket->parseRawHttpRequest($buffer);
-                
-                // HEALTH CHECK endpoint
-                if ($request['method'] === 'GET' && strpos($request['path'], '/health') === 0) {
-                    $response = "HTTP/1.1 200 OK\r\n";
-                    $response .= "Content-Type: application/json\r\n";
-                    $response .= "Connection: close\r\n\r\n";
-                    $response .= json_encode([
-                        'status' => 'healthy',
-                        'server' => 'Xpress Feeder WebSocket',
-                        'timestamp' => (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))->format('c'),
-                        'active_clients' => count($websocket->clients),
-                        'active_flights' => count($websocket->flightCache),
-                        'version' => '2.0.0-patched'
-                    ]);
-                    $socket->write($response);
-                    $socket->end();
-                    $buffer = '';
-                    return;
-                }
-                
-                // FLIGHT PUSH endpoint with AUTHENTICATION (SECURITY FIX)
-                if ($request['method'] === 'POST' && strpos($request['path'], '/push_flight') === 0) {
-                    $apiKey = getenv('PUSH_API_KEY');
-                    $authHeader = $request['headers']['x-api-key'] ?? '';
-                    
-                    if ($apiKey && $authHeader !== $apiKey) {
-                        $response = "HTTP/1.1 401 Unauthorized\r\n";
-                        $response .= "Content-Type: application/json\r\n\r\n";
-                        $response .= json_encode(['error' => 'Invalid API key']);
-                        $socket->write($response);
-                        $socket->end();
-                        $buffer = '';
-                        return;
-                    }
-                    
-                    $flightData = json_decode($request['body'], true);
-                    
-                    if ($flightData && $websocket->handleFlightUpdate($flightData)) {
-                        $response = "HTTP/1.1 200 OK\r\n";
-                        $response .= "Content-Type: application/json\r\n\r\n";
-                        $response .= json_encode([
-                            'status' => 'ok',
-                            'received' => microtime(true),
-                            'callsign' => $flightData['callsign'] ?? 'unknown'
-                        ]);
-                    } else {
-                        $response = "HTTP/1.1 400 Bad Request\r\n";
-                        $response .= "Content-Type: application/json\r\n\r\n";
-                        $response .= json_encode([
-                            'error' => 'Invalid flight data'
-                        ]);
-                    }
-                    
-                    $socket->write($response);
-                    $socket->end();
-                    $buffer = '';
-                    return;
-                }
-                
-                // Unknown endpoint
-                $response = "HTTP/1.1 404 Not Found\r\n";
-                $response .= "Content-Type: application/json\r\n\r\n";
-                $response .= json_encode(['error' => 'Endpoint not found']);
-                $socket->write($response);
-                $socket->end();
-                $buffer = '';
-            }
-        });
-        
-        $socket->on('close', function() use (&$buffer) {
-            $buffer = '';
-        });
-    });
-
     $server->run();
 
 } catch (Exception $e) {
@@ -721,8 +720,3 @@ try {
     error_log("WebSocket Server Fatal Error: " . $e->getMessage() . "\n" . $e->getTraceAsString());
     exit(1);
 }
-
-
-
-
-
