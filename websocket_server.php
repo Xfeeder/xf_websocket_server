@@ -10,9 +10,6 @@ use Ratchet\Http\HttpServer;
 use Ratchet\WebSocket\WsServer;
 use Ratchet\MessageComponentInterface;
 use Ratchet\ConnectionInterface;
-use Ratchet\Http\Router;
-use Symfony\Component\Routing\Route;
-use Symfony\Component\Routing\RouteCollection;
 
 require __DIR__ . '/vendor/autoload.php';
 
@@ -564,119 +561,6 @@ class XpressFeederWebSocket implements MessageComponentInterface {
     }
 }
 
-// Create a custom HTTP server that handles both WebSocket and HTTP requests
-class CustomHttpServer extends HttpServer {
-    private $websocketHandler;
-    
-    public function __construct(WsServer $ws, XpressFeederWebSocket $websocketHandler) {
-        parent::__construct($ws);
-        $this->websocketHandler = $websocketHandler;
-    }
-    
-    public function onOpen(\Ratchet\ConnectionInterface $conn, \Psr\Http\Message\RequestInterface $request = null) {
-        // Check if this is a WebSocket upgrade request
-        $isWebSocket = false;
-        if ($request && $request->hasHeader('Upgrade')) {
-            $upgradeHeaders = $request->getHeader('Upgrade');
-            foreach ($upgradeHeaders as $upgradeHeader) {
-                if (strtolower($upgradeHeader) === 'websocket') {
-                    $isWebSocket = true;
-                    break;
-                }
-            }
-        }
-        
-        if ($isWebSocket) {
-            // Handle as WebSocket
-            parent::onOpen($conn, $request);
-        } else {
-            // Handle as regular HTTP request
-            $this->handleHttpRequest($conn, $request);
-        }
-    }
-    
-    private function handleHttpRequest(\Ratchet\ConnectionInterface $conn, \Psr\Http\Message\RequestInterface $request) {
-        $path = $request->getUri()->getPath();
-        $method = $request->getMethod();
-        
-        // Handle health check
-        if ($method === 'GET' && strpos($path, '/health') === 0) {
-            $response = new \GuzzleHttp\Psr7\Response(
-                200,
-                ['Content-Type' => 'application/json'],
-                json_encode([
-                    'status' => 'healthy',
-                    'server' => 'Xpress Feeder WebSocket',
-                    'timestamp' => (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))->format('c'),
-                    'active_clients' => count($this->websocketHandler->clients),
-                    'active_flights' => count($this->websocketHandler->flightCache),
-                    'version' => '2.0.0-patched'
-                ])
-            );
-            $conn->send(\GuzzleHttp\Psr7\Message::toString($response));
-            $conn->close();
-            return;
-        }
-        
-        // Handle flight push
-        if ($method === 'POST' && strpos($path, '/push_flight') === 0) {
-            $body = (string)$request->getBody();
-            $flightData = json_decode($body, true);
-            
-            // Check authentication
-            $apiKey = getenv('PUSH_API_KEY');
-            $authHeader = $request->getHeaderLine('X-API-Key');
-            
-            if ($apiKey && $authHeader !== $apiKey) {
-                $response = new \GuzzleHttp\Psr7\Response(
-                    401,
-                    ['Content-Type' => 'application/json'],
-                    json_encode(['error' => 'Invalid API key'])
-                );
-                $conn->send(\GuzzleHttp\Psr7\Message::toString($response));
-                $conn->close();
-                return;
-            }
-            
-            // Add auth token for validation
-            if ($flightData) {
-                $flightData['auth_token'] = $authHeader ?: $apiKey;
-            }
-            
-            if ($flightData && $this->websocketHandler->handleFlightUpdate($flightData)) {
-                $response = new \GuzzleHttp\Psr7\Response(
-                    200,
-                    ['Content-Type' => 'application/json'],
-                    json_encode([
-                        'status' => 'ok',
-                        'received' => microtime(true),
-                        'callsign' => $flightData['callsign'] ?? 'unknown'
-                    ])
-                );
-            } else {
-                $response = new \GuzzleHttp\Psr7\Response(
-                    400,
-                    ['Content-Type' => 'application/json'],
-                    json_encode(['error' => 'Invalid flight data'])
-                );
-            }
-            
-            $conn->send(\GuzzleHttp\Psr7\Message::toString($response));
-            $conn->close();
-            return;
-        }
-        
-        // Unknown endpoint
-        $response = new \GuzzleHttp\Psr7\Response(
-            404,
-            ['Content-Type' => 'application/json'],
-            json_encode(['error' => 'Endpoint not found'])
-        );
-        $conn->send(\GuzzleHttp\Psr7\Message::toString($response));
-        $conn->close();
-    }
-}
-
 try {
     // PORT CONFIGURATION WITH VALIDATION
     $port = (int)(getenv('PORT') ?: 10000);
@@ -698,11 +582,10 @@ try {
 
     $websocket = new XpressFeederWebSocket();
 
-    // Create HTTP server with custom handler
+    // Create HTTP server
     $server = IoServer::factory(
-        new CustomHttpServer(
-            new WsServer($websocket),
-            $websocket
+        new HttpServer(
+            new WsServer($websocket)
         ),
         $port,
         $host
